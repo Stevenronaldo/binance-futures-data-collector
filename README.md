@@ -112,22 +112,26 @@ timestamp (index, UTC)
 
 The Lambda execution role needs the following S3 permissions on your bucket:
 
-{
+        {
 
-  "Effect": "Allow",
+          "Effect": "Allow",
+        
+          "Action": \[
 
-  "Action": \[
+            "s3:GetObject",
+        
+            "s3:PutObject"
 
-    "s3:GetObject",
+          \],
 
-    "s3:PutObject"
-
-  \],
-
-  "Resource": "arn:aws:s3:::your-bucket-name/binance-futures-derivative/\*"
-
-}
-
+          "Resource": "arn:aws:s3:::your-bucket-name/binance-futures-derivative/\*"
+        
+        },
+            {
+              "Effect": "Allow",
+              "Action": "s3:ListBucket",
+              "Resource": "arn:aws:s3:::your-bucket-name"
+            }
 ---
 
 ## Dependencies
