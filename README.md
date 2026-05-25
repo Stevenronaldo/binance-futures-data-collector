@@ -22,13 +22,13 @@ This function runs on a scheduled trigger (EventBridge) and collects 5 derivativ
 
 ## Architecture
 
-EventBridge (cron schedule)
+        EventBridge (cron schedule)
 
         │
 
         ▼
 
-  AWS Lambda Function
+          AWS Lambda Function
 
         │
 
