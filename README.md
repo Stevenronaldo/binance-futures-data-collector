@@ -26,8 +26,6 @@ This function runs on a scheduled trigger (EventBridge) and collects 5 derivativ
 
         │
 
-        ▼
-
           AWS Lambda Function
 
         │
