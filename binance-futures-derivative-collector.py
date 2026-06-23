@@ -42,7 +42,7 @@ def fetch_derivative(path, params):
     response = requests.get(path, params = params)
     if response.status_code == 200:
         df = pd.DataFrame(response.json())
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc = True) #make sure datetime is UTC
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc = True).dt.tz_localize(None) #make sure datetime is UTC
         df = df.set_index('timestamp')
         df = df.drop(columns = ['symbol'], errors = 'ignore')
         for col in df.columns:
