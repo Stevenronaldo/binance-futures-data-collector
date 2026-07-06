@@ -31,7 +31,6 @@ Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored
               EventBridge (cron schedule)
 
                          │
-
                          ▼
 
                  AWS Lambda Function
@@ -41,19 +40,16 @@ Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored
     ┌────────────────────┼──────────────────────┐
 
     │                    │                      │
-
     ▼                    ▼                      ▼
 
     klines          Funding Rate          5 Derivatives
-
     (/fapi/v1)       (/fapi/v1)          (/futures/data)
 
     │                    │                      │
 
-    └────────────────────┬─────────────────────┘
+    └────────────────────┬──────────────────────┘
 
                          │
-
                          ▼
 
                         Amazon S3
