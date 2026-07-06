@@ -28,35 +28,35 @@ Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored
 
 ## Architecture
 
-        EventBridge (cron schedule)
+              EventBridge (cron schedule)
 
-                  │
+                         │
 
-                  ▼
+                         ▼
 
-          AWS Lambda Function
+                 AWS Lambda Function
 
-                  │
+                         │
 
-    ┌─────────────┼──────────────────────────────┐
+    ┌────────────────────┼──────────────────────┐
 
-    │             │                               │
+    │                    │                      │
 
-    ▼             ▼                               ▼
+    ▼                    ▼                      ▼
 
- Klines      Funding Rate                  5 Derivatives
+    klines          Funding Rate          5 Derivatives
 
-(/fapi/v1)   (/fapi/v1)                    (/futures/data)
+    (/fapi/v1)       (/fapi/v1)          (/futures/data)
 
-    │             │                               │
+    │                    │                      │
 
-    └─────────────┴───────────────┬───────────────┘
+    └────────────────────┬─────────────────────┘
 
-                                  │
+                         │
 
-                                  ▼
+                         ▼
 
-                            Amazon S3
+                        Amazon S3
 
                             └── binance-futures/
 
@@ -109,13 +109,13 @@ PERIOD    \= 1h
 
 ### Layout
 
-s3://{S3\_BUCKET}/binance-futures/
+    s3://{S3\_BUCKET}/binance-futures/
 
-├── \_watermark/
+    ├── \_watermark/
 
-│     └── {SYMBOL}-{endpoint}-period={PERIOD}.json
+    │     └── {SYMBOL}-{endpoint}-period={PERIOD}.json
 
-└── endpoint={endpoint}/
+    └── endpoint={endpoint}/
 
       └── symbol={SYMBOL}/
 
@@ -127,21 +127,21 @@ Hive-style partition keys (`endpoint=`, `symbol=`) allow Athena to use **partiti
 
 Each `_watermark/*.json` tracks incremental state for one symbol+endpoint:
 
-{
+    {
 
-  "symbol": "BTCUSDT",
+    "symbol": "BTCUSDT",
 
-  "period": "1h",
+    "period": "1h",
 
-  "endpoint": "openInterestHist",
+    "endpoint": "openInterestHist",
 
-  "last\_startTime": 1718000000000,
+    "last\_startTime": 1718000000000,
 
-  "update\_time": 1718003600000,
+    "update\_time": 1718003600000,
 
-  "update\_time\_UTC": "2024-06-10T08:00:00+00:00"
+    "update\_time\_UTC": "2024-06-10T08:00:00+00:00"
 
-}
+    }
 
 ### Parquet schemas (raw Binance columns)
 
@@ -181,9 +181,9 @@ All timestamp/time fields are Unix epoch **milliseconds (UTC)**.
 
 The Lambda execution role needs read/write on the data prefix and list on the bucket:
 
-\[
+    [
 
-  {
+    {
 
     "Effect": "Allow",
 
@@ -197,9 +197,9 @@ The Lambda execution role needs read/write on the data prefix and list on the bu
 
     "Resource": "arn:aws:s3:::your-bucket-name/binance-futures/\*"
 
-  },
+    },
 
-  {
+    {
 
     "Effect": "Allow",
 
@@ -207,9 +207,9 @@ The Lambda execution role needs read/write on the data prefix and list on the bu
 
     "Resource": "arn:aws:s3:::your-bucket-name"
 
-  }
+    }
 
-\]
+    ]
 
 ---
 
@@ -260,23 +260,23 @@ Because incremental fetching is watermark-driven (resume from `last_startTime`),
 - **No new data:** returns `"OK — no new data"` when the incremental fetch is empty.  
 - **Return body** always includes a per-symbol, per-endpoint summary:
 
-{
+      {
 
-  "summary": {
+      "summary": {
 
-    "BTCUSDT": {
+                   "BTCUSDT": {
 
-      "open\_interest": {"new\_rows": 24, "total\_rows": 720, "last\_startTime": 1718000000000},
+                                "open\_interest": {"new\_rows": 24, "total\_rows": 720, "last\_startTime": 1718000000000},
 
-      "fundingrate":  {"new\_rows": 3,  "total\_rows": 12960, "last\_startTime": 1718000000000},
+                                "fundingrate":  {"new\_rows": 3,  "total\_rows": 12960, "last\_startTime": 1718000000000},
 
-      "klines":       {"new\_rows": 24, "total\_rows": 42000, "last\_startTime": 1718000000000}
+                                "klines":       {"new\_rows": 24, "total\_rows": 42000, "last\_startTime": 1718000000000}
 
-    }
+                               }
 
-  }
+                 }
 
-}
+      }
 
 ---
 
