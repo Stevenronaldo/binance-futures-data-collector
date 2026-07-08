@@ -39,10 +39,27 @@ def fetch_derivative(url, symbol, period, limit = 500, startTime = None):
     print(f"----Fetching {symbol}_{period}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     response = requests.get(url, params = params, timeout = 10)
     data = response.json()
-    print(f"status={response.status_code}, data type={type(data)}, data={str(data)[:200]}")
     if response.status_code == 200:
         df = pd.DataFrame(data)
         df = clean_df(df, time_field = 'timestamp', exclude =['symbol'])
+        return df
+    else:
+      print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
+      return None
+
+def fetch_basis(url, symbol, period, contractType = 'PERPETUAL',  limit = 500, startTime = None):
+    """
+    fetch basis data from binance API [/futures/data/basis]
+    Return data as dataframe
+    """
+    endTime = int(time.time() * 1000) if startTime is not None else None
+    params = {'pair' : symbol, 'contractType': contractType, 'period' : period, 'limit': limit, 'startTime' : startTime, 'endTime': endTime}
+    print(f"----Fetching {symbol}_{period}_{contractType}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
+    response = requests.get(url, params = params, timeout = 10)
+    data = response.json()
+    if response.status_code == 200:
+        df = pd.DataFrame(data)
+        df = clean_df(df, time_field = 'timestamp', exclude =['pair', 'contractType'])
         return df
     else:
       print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
@@ -59,7 +76,6 @@ def fetch_fundingrate(url, symbol, limit = 1000, startTime = 1567641600000): # 2
         params = {"symbol": symbol, "startTime": startTime, "limit": limit}
         response = requests.get(url, params=params, timeout = 10)
         data = response.json()
-        print(f"status={response.status_code}, data type={type(data)}, data={str(data)[:200]}")
 
         if response.status_code != 200:
             print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
@@ -91,8 +107,6 @@ def fetch_klines(url, symbol, interval, limit = 1500, startTime = 1567641600000)
         params = {'symbol': symbol, 'interval': interval, 'startTime': startTime, 'limit': limit}
         response = requests.get(url, params=params, timeout = 10)
         data = response.json()
-        print(f"status={response.status_code}, data type={type(data)}, data={str(data)[:200]}")
-
         if response.status_code != 200:
             print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
             return None
@@ -166,7 +180,7 @@ def upsert_to_s3(bucket, key, new_df, time_field):
         combined = new_df  # First write — no existing file
 
     buf = io.BytesIO()
-    combined.to_parquet(buf, engine="pyarrow")
+    combined.to_parquet(buf, engine="pyarrow", index=False)
     buf.seek(0)
 
     s3.put_object(
@@ -231,6 +245,10 @@ def lambda_handler(event, context):
             #fetch futures derivative
             for urlKey in futuresdata_url:
                 summary[symbol][urlKey] = fetch_process(futuresdata_url[urlKey], symbol, fetch_derivative, 'timestamp', PERIOD)
+            
+            #fetch basis
+            basis_url = 'https://fapi.binance.com/futures/data/basis'
+            summary[symbol]['basis'] = fetch_process(basis_url, symbol, fetch_basis, 'timestamp', PERIOD)
             
             #fetch fundingrate
             fundingrate_url = 'https://fapi.binance.com/fapi/v1/fundingRate'
