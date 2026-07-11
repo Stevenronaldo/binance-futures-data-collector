@@ -1,12 +1,18 @@
-# 📊 Binance Futures Data Collector
+# 📊 Binance Futures Data Pipeline
 
-An AWS Lambda function that automatically fetches **klines, funding rate, and derivatives** data from the Binance USDⓈ-M Futures API and stores it as Hive-partitioned Parquet files in S3. Built for building time-series datasets for trading analysis and model development, queryable directly with Athena.
+An end-to-end data pipeline that collects **klines, funding rate, and derivatives** data from the Binance USDⓈ-M Futures API, stores it as Hive-partitioned Parquet in S3, and exposes it through an Athena serving layer — culminating in a single **feature matrix** designed for time-series analysis and ML model development.
 
 ---
 
 ## Overview
 
-This function runs on a scheduled trigger (EventBridge) and collects **7 datasets per symbol** from the Binance Futures API — klines, funding rate, and 5 derivatives metrics.
+An AWS Lambda function runs on a scheduled trigger (EventBridge) and collects **7 datasets per symbol** from the Binance Futures API. Raw data lands in S3 as per-endpoint Parquet files, which are queried through Athena external tables and joined into a single hourly feature matrix view.
+
+The pipeline has three layers:
+
+1. **Ingestion** — EventBridge-triggered Lambda pulls from the Binance API.  
+2. **Storage** — Hive-partitioned Parquet in S3, with incremental watermark-driven loading.  
+3. **Serving** — Athena external tables (partition projection) and a One Big Table feature-matrix view.
 
 Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored as a small JSON file in S3. On the first run, each endpoint backfills its full available history; on every subsequent run, fetching resumes from the last recorded `startTime`, and new rows are upserted — deduplicating by the endpoint's time field so no rows are ever duplicated.
 
@@ -15,67 +21,55 @@ Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored
 | Dataset | Binance Endpoint | Time Field | First-Run Backfill |
 | :---- | :---- | :---- | :---- |
 | Klines (OHLCV) | `/fapi/v1/klines` | `open_time` | From 2019-09-05 (futures launch) |
+| Index Price Klines | `/fapi/v1/indexPriceKlines` | `open_time` | From 2019-09-05 (futures launch) |
 | Funding Rate | `/fapi/v1/fundingRate` | `fundingTime` | From 2019-09-05 (futures launch) |
 | Open Interest | `/futures/data/openInterestHist` | `timestamp` | Up to 500 rows (API limit) |
 | Global Long/Short Account Ratio | `/futures/data/globalLongShortAccountRatio` | `timestamp` | Up to 500 rows (API limit) |
 | Top Trader Account Ratio | `/futures/data/topLongShortAccountRatio` | `timestamp` | Up to 500 rows (API limit) |
 | Top Trader Position Ratio | `/futures/data/topLongShortPositionRatio` | `timestamp` | Up to 500 rows (API limit) |
-| Taker Buy/Sell Volume | `/futures/data/takerlongshortRatio` | `timestamp` | Up to 500 rows (API limit) |
 
-**Note on backfill limits:** Binance's `/futures/data/*` endpoints only expose the most recent \~30 days of history, so derivatives first-runs are capped at 500 rows by the API. Klines and funding rate have no such limit and are paginated all the way back to the futures launch.
+**Note on backfill limits:** Binance's `/futures/data/*` endpoints only expose the most recent \~30 days of history, so derivatives first-runs are capped at 500 rows by the API. Klines, index price klines, and funding rate have no such limit and are paginated all the way back to the futures launch.
+
+**Note on derived features:** the taker buy/sell ratio is *not* collected as a separate endpoint — it is derived at query time from the klines `taker_buy_base` and `volume` columns, avoiding a redundant dataset.
 
 ---
 
 ## Architecture
 
-              EventBridge (cron schedule)
+flowchart TD
 
-                         │
-                         ▼
+    EB\[EventBridge cron schedule\] \--\> L\[AWS Lambda\]
 
-                 AWS Lambda Function
+    L \--\> K\[klines\]
 
-                         │
+    L \--\> IP\[index price klines\]
 
-    ┌────────────────────┼──────────────────────┐
+    L \--\> F\[funding rate\]
 
-    │                    │                      │
-    ▼                    ▼                      ▼
+    L \--\> D\[5 derivatives endpoints\]
 
-    klines          Funding Rate          5 Derivatives
-    (/fapi/v1)       (/fapi/v1)          (/futures/data)
+    K \--\> S3\[(Amazon S3\<br/\>Hive-partitioned Parquet)\]
 
-    │                    │                      │
+    IP \--\> S3
 
-    └────────────────────┬──────────────────────┘
+    F \--\> S3
 
-                         │
-                         ▼
+    D \--\> S3
 
-                        Amazon S3
+    S3 \--\> A\[Athena\<br/\>7 external tables\<br/\>partition projection\]
 
-                            └── binance-futures/
-
-                                ├── \_watermark/
-
-                                │     └── {SYMBOL}-{endpoint}-period={PERIOD}.json
-
-                                └── endpoint={endpoint}/
-
-                                      └── symbol={SYMBOL}/
-
-                                            └── {SYMBOL}-{endpoint}-period={PERIOD}.parquet
+    A \--\> V\[feature\_matrix view\]
 
 **Per endpoint, per symbol, each run:**
 
 1. Read the watermark JSON (`last_startTime`). Missing file → treated as first run.  
-2. **First run:** klines / funding rate paginate from 2019-09-05; derivatives fetch up to 500 rows.  
+2. **First run:** klines / index price / funding rate paginate from 2019-09-05; derivatives fetch up to 500 rows.  
 3. **Incremental run:** fetch from `last_startTime + 1`.  
-4. Clean (deduplicate on time field, coerce to numeric).  
+4. Clean (deduplicate on time field, coerce to numeric, write with `index=False`).  
 5. Upsert into the endpoint's Parquet file (concat → drop duplicates → sort).  
 6. Write the new watermark.
 
-One file is written **per endpoint per symbol** — datasets are *not* merged into a single wide table.
+One file is written **per endpoint per symbol**. The datasets are joined into a single wide table only at the serving layer (see below), not at ingestion.
 
 ---
 
@@ -89,13 +83,13 @@ Configure these in your Lambda function's environment settings:
 | `SYMBOLS` | ✅ | — | Comma-separated list of trading pairs (e.g. `BTCUSDT,ETHUSDT`) |
 | `PERIOD` | ❌ | `1h` | Aggregation period for klines & derivatives (`5m`, `15m`, `1h`, `4h`, `1d`) |
 
-Incremental fetching bounded by the watermark, not a fixed row count. Funding rate ignores `PERIOD` (it has fixed settlement times).
+Incremental fetching is bounded by the watermark, not a fixed row count. Funding rate ignores `PERIOD` (it has fixed settlement times).
 
 **Example:**
 
 S3\_BUCKET \= my-trading-data-bucket
 
-SYMBOLS   \= BTCUSDT,ETHUSDT,SOLUSDT
+SYMBOLS   \= BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,HYPEUSDT,XRPUSDT
 
 PERIOD    \= 1h
 
@@ -105,13 +99,13 @@ PERIOD    \= 1h
 
 ### Layout
 
-    s3://{S3\_BUCKET}/binance-futures/
+s3://{S3\_BUCKET}/binance-futures/
 
-    ├── \_watermark/
+├── \_watermark/
 
-    │     └── {SYMBOL}-{endpoint}-period={PERIOD}.json
+│     └── {SYMBOL}-{endpoint}-period={PERIOD}.json
 
-    └── endpoint={endpoint}/
+└── endpoint={endpoint}/
 
       └── symbol={SYMBOL}/
 
@@ -123,21 +117,21 @@ Hive-style partition keys (`endpoint=`, `symbol=`) allow Athena to use **partiti
 
 Each `_watermark/*.json` tracks incremental state for one symbol+endpoint:
 
-    {
+{
 
-    "symbol": "BTCUSDT",
+  "symbol": "BTCUSDT",
 
-    "period": "1h",
+  "period": "1h",
 
-    "endpoint": "openInterestHist",
+  "endpoint": "openInterestHist",
 
-    "last\_startTime": 1718000000000,
+  "last\_startTime": 1718000000000,
 
-    "update\_time": 1718003600000,
+  "update\_time": 1718003600000,
 
-    "update\_time\_UTC": "2024-06-10T08:00:00+00:00"
+  "update\_time\_UTC": "2024-06-10T08:00:00+00:00"
 
-    }
+}
 
 ### Parquet schemas (raw Binance columns)
 
@@ -151,13 +145,17 @@ close\_time · quote\_volume · num\_trades ·
 
 taker\_buy\_base · taker\_buy\_quote
 
+**Index price klines** (`endpoint=indexPriceKlines`):
+
+open\_time · open · high · low · close · close\_time
+
 **Funding rate** (`endpoint=fundingRate`):
 
 symbol · fundingTime · fundingRate · markPrice
 
 **Open interest** (`endpoint=openInterestHist`):
 
-symbol · sumOpenInterest · sumOpenInterestValue · timestamp
+symbol · sumOpenInterest · sumOpenInterestValue · CMCCirculatingSupply · timestamp
 
 **Global / Top-trader ratios** (`globalLongShortAccountRatio`, `topLongShortAccountRatio`, `topLongShortPositionRatio`):
 
@@ -165,11 +163,58 @@ symbol · longAccount · shortAccount · longShortRatio · timestamp
 
 For `topLongShortPositionRatio`, `longAccount`/`shortAccount` represent position share rather than account share.
 
-**Taker volume** (`endpoint=takerlongshortRatio`):
-
-buySellRatio · buyVol · sellVol · timestamp
-
 All timestamp/time fields are Unix epoch **milliseconds (UTC)**.
+
+---
+
+## Serving Layer (Athena)
+
+The raw per-endpoint Parquet files are exposed as a queryable serving layer in Athena, culminating in a single feature matrix for model training. SQL definitions live in `athena/`.
+
+### External Tables
+
+Seven external tables (one per endpoint) sit over the S3 data, each using **partition projection** on `symbol` — partitions are computed at query time with zero maintenance (no `MSCK REPAIR`, no manual `ADD PARTITION`). Table definitions are in `athena/tables/`.
+
+Example (funding rate):
+
+CREATE EXTERNAL TABLE funding\_rate (
+
+    fundingtime BIGINT,
+
+    fundingrate DOUBLE,
+
+    markprice   DOUBLE
+
+)
+
+PARTITIONED BY (symbol STRING)
+
+STORED AS PARQUET
+
+LOCATION 's3://\<your-bucket\>/binance-futures/endpoint=fundingRate/'
+
+TBLPROPERTIES (
+
+    'projection.enabled' \= 'true',
+
+    'projection.symbol.type'   \= 'enum',
+
+    'projection.symbol.values' \= \<your-symbol\>
+
+);
+
+### Feature Matrix View (One Big Table)
+
+`athena/feature_matrix_view.sql` defines a denormalized **One Big Table (OBT)** — a single hourly feature matrix per `(symbol, timestamp)` built by joining all endpoints, designed as the training dataset for downstream ML.
+
+Transformations handled in the view:
+
+- **Timestamp alignment** — funding-rate timestamps drift 1–5 ms off the hour; all time fields are floored to the hour (`ts / 3600000 * 3600000`) so joins match cleanly.  
+- **Funding-rate forward-fill** — funding settles every 8 h while other metrics are hourly. A `LAST_VALUE(...) IGNORE NULLS OVER (PARTITION BY symbol ORDER BY ts)` window carries the last known funding rate forward across the intervening hours. The frame is backward-looking only (`UNBOUNDED PRECEDING` to `CURRENT ROW`), so there is no look-ahead leakage.  
+- **Derived features** — `basis_rate` computed as `(close − index_close) / index_close`; taker long/short ratio derived inline from klines as `taker_buy_base / (volume − taker_buy_base)`.  
+- **Redundancy pruning** — base-vs-quote duplicate columns (`sumOpenInterestValue`, `quote_volume`) and near-static fields (`CMCCirculatingSupply`) are dropped in favour of a single representative per concept.
+
+Because the derivatives endpoints are capped at \~30 days, the joined feature matrix uses INNER joins on those tables and clips to the window where all features coexist (\~500 rows per symbol at launch), growing continuously as the pipeline runs.
 
 ---
 
@@ -177,25 +222,19 @@ All timestamp/time fields are Unix epoch **milliseconds (UTC)**.
 
 The Lambda execution role needs read/write on the data prefix and list on the bucket:
 
-    [
+\[
 
-    {
+  {
 
     "Effect": "Allow",
 
-    "Action": \[
-
-      "s3:GetObject",
-
-      "s3:PutObject"
-
-    \],
+    "Action": \["s3:GetObject", "s3:PutObject"\],
 
     "Resource": "arn:aws:s3:::your-bucket-name/binance-futures/\*"
 
-    },
+  },
 
-    {
+  {
 
     "Effect": "Allow",
 
@@ -203,9 +242,9 @@ The Lambda execution role needs read/write on the data prefix and list on the bu
 
     "Resource": "arn:aws:s3:::your-bucket-name"
 
-    }
+  }
 
-    ]
+\]
 
 ---
 
@@ -256,42 +295,67 @@ Because incremental fetching is watermark-driven (resume from `last_startTime`),
 - **No new data:** returns `"OK — no new data"` when the incremental fetch is empty.  
 - **Return body** always includes a per-symbol, per-endpoint summary:
 
-      {
+{
 
-      "summary": {
+  "summary": {
 
-                   "BTCUSDT": {
+    "BTCUSDT": {
 
-                                "open\_interest": {"new\_rows": 24, "total\_rows": 720, "last\_startTime": 1718000000000},
+      "open\_interest": {"new\_rows": 24, "total\_rows": 720,   "last\_startTime": 1718000000000},
 
-                                "fundingrate":  {"new\_rows": 3,  "total\_rows": 12960, "last\_startTime": 1718000000000},
+      "fundingrate":   {"new\_rows": 3,  "total\_rows": 12960, "last\_startTime": 1718000000000},
 
-                                "klines":       {"new\_rows": 24, "total\_rows": 42000, "last\_startTime": 1718000000000}
+      "klines":        {"new\_rows": 24, "total\_rows": 42000, "last\_startTime": 1718000000000}
 
-                               }
+    }
 
-                 }
+  }
 
-      }
+}
 
 ---
 
-## Querying with Athena
+## Project Structure
 
-Create an external table over `s3://{S3_BUCKET}/binance-futures/endpoint={endpoint}/symbol={symbol}/` with **partition projection** enabled on `endpoint` and `symbol`. Because each endpoint has its own schema, define one table per endpoint (or per group of ratio endpoints that share columns). Parquet \+ partition pruning keeps scans small and cheap.
+binance-futures-data-collector/
+
+├── src/
+
+│   └── binance-futures-data-collector.py   \# collector logic \+ Lambda entry point (lambda\_handler)
+
+├── athena/
+
+│   ├── tables/                             \# CREATE EXTERNAL TABLE per endpoint
+
+│   │   ├── klines.sql
+
+│   │   ├── index\_price\_klines.sql
+
+│   │   ├── funding\_rate.sql
+
+│   │   ├── open\_interest.sql
+
+│   │   ├── global\_ls\_account\_ratio.sql
+
+│   │   ├── top\_ls\_account\_ratio.sql
+
+│   │   └── top\_ls\_position\_ratio.sql
+
+│   └── feature\_matrix\_view.sql             \# One Big Table: joined hourly feature matrix
+
+├── README.md
+
+├── requirements.txt
+
+└── LICENSE
 
 ---
 
 ## Notes
 
 - All timestamps are stored in **UTC** (Unix epoch milliseconds).  
-- Each endpoint lives in its **own file** — no cross-metric outer join. Join across endpoints at query time on the time field if you need a wide view.  
+- Each endpoint lands in its **own file**. The datasets are joined into a wide feature matrix by the Athena `feature_matrix` view at query time, not when the data is collected.  
 - The upsert logic uses `keep="last"` deduplication, so re-running the function for an overlapping window is safe and idempotent.  
 - Binance rate limits apply. Fetch loops `time.sleep(0.3)` between paginated pages; for large symbol lists consider batching across multiple Lambda invocations.  
 - `PERIOD` affects klines and derivatives only; funding rate settles on Binance's fixed schedule.
 
----
-
-## Files
-
-- `binance-futures-data-collector.py` — collector logic and Lambda entry point (`lambda_handler`).
