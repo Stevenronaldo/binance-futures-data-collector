@@ -36,6 +36,7 @@ Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored
 
 ## Architecture
 
+```mermaid
 flowchart TD
 
     EB[EventBridge cron schedule] --> L[AWS Lambda]
@@ -59,6 +60,7 @@ flowchart TD
     S3 --> A[Athena<br/>7 external tables<br/>partition projection]
 
     A --> V[feature_matrix view]
+```
 
 **Per endpoint, per symbol, each run:**
 
