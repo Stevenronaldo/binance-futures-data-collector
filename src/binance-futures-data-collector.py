@@ -11,7 +11,6 @@ futuresdata_url = {
     'global_long_short'   :'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     'top_trader_accounts' :'https://fapi.binance.com/futures/data/topLongShortAccountRatio',
     'top_trader_positions':'https://fapi.binance.com/futures/data/topLongShortPositionRatio',
-    'taker_volume'        :'https://fapi.binance.com/futures/data/takerlongshortRatio',
     }
 
 # Read from Lambda environment variables
@@ -38,32 +37,15 @@ def fetch_derivative(url, symbol, period, limit = 500, startTime = None):
     params = {'symbol' : symbol, 'period' : period, 'limit': limit, 'startTime' : startTime}
     print(f"----Fetching {symbol}_{period}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     response = requests.get(url, params = params, timeout = 10)
+    time.sleep(0.3)
     data = response.json()
     if response.status_code == 200:
         df = pd.DataFrame(data)
         df = clean_df(df, time_field = 'timestamp', exclude =['symbol'])
         return df
     else:
-      print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
-      return None
-
-def fetch_basis(url, symbol, period, contractType = 'PERPETUAL',  limit = 500, startTime = None):
-    """
-    fetch basis data from binance API [/futures/data/basis]
-    Return data as dataframe
-    """
-    endTime = int(time.time() * 1000) if startTime is not None else None
-    params = {'pair' : symbol, 'contractType': contractType, 'period' : period, 'limit': limit, 'startTime' : startTime, 'endTime': endTime}
-    print(f"----Fetching {symbol}_{period}_{contractType}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
-    response = requests.get(url, params = params, timeout = 10)
-    data = response.json()
-    if response.status_code == 200:
-        df = pd.DataFrame(data)
-        df = clean_df(df, time_field = 'timestamp', exclude =['pair', 'contractType'])
-        return df
-    else:
-      print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
-      return None
+        print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
+        return None
 
 def fetch_fundingrate(url, symbol, limit = 1000, startTime = 1567641600000): # 2019-09-05 (Binance futures launch)
     """
@@ -76,7 +58,6 @@ def fetch_fundingrate(url, symbol, limit = 1000, startTime = 1567641600000): # 2
         params = {"symbol": symbol, "startTime": startTime, "limit": limit}
         response = requests.get(url, params=params, timeout = 10)
         data = response.json()
-
         if response.status_code != 200:
             print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
             return None
@@ -128,6 +109,39 @@ def fetch_klines(url, symbol, interval, limit = 1500, startTime = 1567641600000)
 
     df = pd.DataFrame(record, columns = klines_columns)
     df = df.drop(columns=['ignore'])
+    now_ms = int(time.time() * 1000)
+    df = df[df['close_time'] <= now_ms]
+    df = clean_df(df, time_field = 'open_time')
+    return df
+
+def fetch_indexprice(url, symbol, interval, limit = 1500, startTime = 1567641600000): # 2019-09-05 (Binance futures launch)
+    """
+    fetch index price klines data from binance API [/fapi/v1/indexPriceKlines]
+    Return data as dataframe
+    """
+    print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
+    record = []
+    while True:
+        params = {'pair': symbol, 'interval': interval, 'startTime': startTime, 'limit': limit}
+        response = requests.get(url, params=params, timeout = 10)
+        data = response.json()
+        if response.status_code != 200:
+            print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
+            return None
+        if not data:
+            break
+
+        record.extend(data)
+        print(f"  Fetched {len(record)} records so far... (up to {pd.to_datetime(data[-1][0], unit='ms').date()})")
+
+        if len(data) < limit:
+            break
+
+        startTime = data[-1][0] + 1
+        time.sleep(0.3)
+
+    df = pd.DataFrame(record).iloc[:, [0, 1, 2, 3, 4, 6]]
+    df.columns = ['open_time', 'open', 'high', 'low', 'close', 'close_time']
     now_ms = int(time.time() * 1000)
     df = df[df['close_time'] <= now_ms]
     df = clean_df(df, time_field = 'open_time')
@@ -245,11 +259,7 @@ def lambda_handler(event, context):
             #fetch futures derivative
             for urlKey in futuresdata_url:
                 summary[symbol][urlKey] = fetch_process(futuresdata_url[urlKey], symbol, fetch_derivative, 'timestamp', PERIOD)
-            
-            #fetch basis
-            basis_url = 'https://fapi.binance.com/futures/data/basis'
-            summary[symbol]['basis'] = fetch_process(basis_url, symbol, fetch_basis, 'timestamp', PERIOD)
-            
+                   
             #fetch fundingrate
             fundingrate_url = 'https://fapi.binance.com/fapi/v1/fundingRate'
             summary[symbol]['fundingrate'] = fetch_process(fundingrate_url, symbol, fetch_fundingrate, 'fundingTime', None)
@@ -257,6 +267,10 @@ def lambda_handler(event, context):
             #fetch kline
             klines_url = 'https://fapi.binance.com/fapi/v1/klines'
             summary[symbol]['klines'] = fetch_process(klines_url, symbol, fetch_klines, 'open_time', PERIOD)
+
+            #fetch index price klines
+            indexprice_url = 'https://fapi.binance.com/fapi/v1/indexPriceKlines'
+            summary[symbol]['indexprice'] = fetch_process(indexprice_url, symbol, fetch_indexprice, 'open_time', PERIOD)
         except Exception as e:
             # One symbol failing shouldn't kill other symbols
             print(f"[{symbol}] FAILED: {e}")
