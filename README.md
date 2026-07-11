@@ -38,27 +38,27 @@ Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored
 
 flowchart TD
 
-    EB\[EventBridge cron schedule\] \--\> L\[AWS Lambda\]
+    EB[EventBridge cron schedule] --> L[AWS Lambda]
 
-    L \--\> K\[klines\]
+    L --> K[klines]
 
-    L \--\> IP\[index price klines\]
+    L --> IP[index price klines]
 
-    L \--\> F\[funding rate\]
+    L --> F[funding rate]
 
-    L \--\> D\[5 derivatives endpoints\]
+    L --> D[4 derivatives endpoints]
 
-    K \--\> S3\[(Amazon S3\<br/\>Hive-partitioned Parquet)\]
+    K --> S3[(Amazon S3<br/>Hive-partitioned Parquet)]
 
-    IP \--\> S3
+    IP --> S3
 
-    F \--\> S3
+    F --> S3
 
-    D \--\> S3
+    D --> S3
 
-    S3 \--\> A\[Athena\<br/\>7 external tables\<br/\>partition projection\]
+    S3 --> A[Athena<br/>7 external tables<br/>partition projection]
 
-    A \--\> V\[feature\_matrix view\]
+    A --> V[feature_matrix view]
 
 **Per endpoint, per symbol, each run:**
 
@@ -99,17 +99,17 @@ PERIOD    \= 1h
 
 ### Layout
 
-s3://{S3\_BUCKET}/binance-futures/
+    s3://{S3\_BUCKET}/binance-futures/
 
-├── \_watermark/
+    ├── \_watermark/
 
-│     └── {SYMBOL}-{endpoint}-period={PERIOD}.json
+    │     └── {SYMBOL}-{endpoint}-period={PERIOD}.json
 
-└── endpoint={endpoint}/
+    └── endpoint={endpoint}/
 
-      └── symbol={SYMBOL}/
-
-            └── {SYMBOL}-{endpoint}-period={PERIOD}.parquet
+          └── symbol={SYMBOL}/
+   
+                └── {SYMBOL}-{endpoint}-period={PERIOD}.parquet
 
 Hive-style partition keys (`endpoint=`, `symbol=`) allow Athena to use **partition projection** for efficient, low-scan queries.
 
@@ -117,21 +117,21 @@ Hive-style partition keys (`endpoint=`, `symbol=`) allow Athena to use **partiti
 
 Each `_watermark/*.json` tracks incremental state for one symbol+endpoint:
 
-{
+    {
+ 
+      "symbol": "BTCUSDT",
 
-  "symbol": "BTCUSDT",
+      "period": "1h",
 
-  "period": "1h",
+      "endpoint": "openInterestHist",
 
-  "endpoint": "openInterestHist",
+      "last\_startTime": 1718000000000,
 
-  "last\_startTime": 1718000000000,
+      "update\_time": 1718003600000,
 
-  "update\_time": 1718003600000,
+      "update\_time\_UTC": "2024-06-10T08:00:00+00:00"
 
-  "update\_time\_UTC": "2024-06-10T08:00:00+00:00"
-
-}
+    }
 
 ### Parquet schemas (raw Binance columns)
 
@@ -139,27 +139,27 @@ Each endpoint is stored in its own file with the raw columns Binance returns.
 
 **Klines** (`endpoint=klines`) — `ignore` column dropped:
 
-open\_time · open · high · low · close · volume ·
+    open\_time · open · high · low · close · volume ·
 
-close\_time · quote\_volume · num\_trades ·
+    close\_time · quote\_volume · num\_trades ·
 
-taker\_buy\_base · taker\_buy\_quote
+    taker\_buy\_base · taker\_buy\_quote
 
 **Index price klines** (`endpoint=indexPriceKlines`):
 
-open\_time · open · high · low · close · close\_time
+    open\_time · open · high · low · close · close\_time
 
 **Funding rate** (`endpoint=fundingRate`):
 
-symbol · fundingTime · fundingRate · markPrice
+    symbol · fundingTime · fundingRate · markPrice
 
 **Open interest** (`endpoint=openInterestHist`):
 
-symbol · sumOpenInterest · sumOpenInterestValue · CMCCirculatingSupply · timestamp
+    symbol · sumOpenInterest · sumOpenInterestValue · CMCCirculatingSupply · timestamp
 
 **Global / Top-trader ratios** (`globalLongShortAccountRatio`, `topLongShortAccountRatio`, `topLongShortPositionRatio`):
 
-symbol · longAccount · shortAccount · longShortRatio · timestamp
+    symbol · longAccount · shortAccount · longShortRatio · timestamp
 
 For `topLongShortPositionRatio`, `longAccount`/`shortAccount` represent position share rather than account share.
 
@@ -177,31 +177,31 @@ Seven external tables (one per endpoint) sit over the S3 data, each using **part
 
 Example (funding rate):
 
-CREATE EXTERNAL TABLE funding\_rate (
+    CREATE EXTERNAL TABLE funding\_rate (
 
-    fundingtime BIGINT,
+        fundingtime BIGINT,
 
-    fundingrate DOUBLE,
+        fundingrate DOUBLE,
+ 
+        markprice   DOUBLE
 
-    markprice   DOUBLE
+    )
 
-)
+    PARTITIONED BY (symbol STRING)
 
-PARTITIONED BY (symbol STRING)
+    STORED AS PARQUET
 
-STORED AS PARQUET
+    LOCATION 's3://\<your-bucket\>/binance-futures/endpoint=fundingRate/'
 
-LOCATION 's3://\<your-bucket\>/binance-futures/endpoint=fundingRate/'
+    TBLPROPERTIES (
 
-TBLPROPERTIES (
+        'projection.enabled' \= 'true',
+    
+        'projection.symbol.type'   \= 'enum',
 
-    'projection.enabled' \= 'true',
+        'projection.symbol.values' \= \<your-symbol\>
 
-    'projection.symbol.type'   \= 'enum',
-
-    'projection.symbol.values' \= \<your-symbol\>
-
-);
+    );
 
 ### Feature Matrix View (One Big Table)
 
@@ -222,41 +222,41 @@ Because the derivatives endpoints are capped at \~30 days, the joined feature ma
 
 The Lambda execution role needs read/write on the data prefix and list on the bucket:
 
-\[
+    \[
 
-  {
+      {
 
-    "Effect": "Allow",
+        "Effect": "Allow",
 
-    "Action": \["s3:GetObject", "s3:PutObject"\],
+        "Action": \["s3:GetObject", "s3:PutObject"\],
 
-    "Resource": "arn:aws:s3:::your-bucket-name/binance-futures/\*"
+        "Resource": "arn:aws:s3:::your-bucket-name/binance-futures/\*"
 
-  },
+      },
 
-  {
+      {
 
-    "Effect": "Allow",
+        "Effect": "Allow",
 
-    "Action": "s3:ListBucket",
+        "Action": "s3:ListBucket",
 
-    "Resource": "arn:aws:s3:::your-bucket-name"
+        "Resource": "arn:aws:s3:::your-bucket-name"
 
-  }
+      }
 
-\]
+    \]
 
 ---
 
 ## Dependencies
 
-requests
+    requests
 
-pandas
+    pandas
 
-pyarrow
+    pyarrow
 
-boto3
+    boto3
 
 `boto3` is pre-installed in the Lambda runtime. Package `requests`, `pandas`, and `pyarrow` into a Lambda layer or your deployment ZIP (a container image also works and avoids the layer size limit).
 
@@ -295,59 +295,59 @@ Because incremental fetching is watermark-driven (resume from `last_startTime`),
 - **No new data:** returns `"OK — no new data"` when the incremental fetch is empty.  
 - **Return body** always includes a per-symbol, per-endpoint summary:
 
-{
+    {
 
-  "summary": {
+      "summary": {
 
-    "BTCUSDT": {
+        "BTCUSDT": {
 
-      "open\_interest": {"new\_rows": 24, "total\_rows": 720,   "last\_startTime": 1718000000000},
+          "open\_interest": {"new\_rows": 24, "total\_rows": 720,   "last\_startTime": 1718000000000},
 
-      "fundingrate":   {"new\_rows": 3,  "total\_rows": 12960, "last\_startTime": 1718000000000},
+          "fundingrate":   {"new\_rows": 3,  "total\_rows": 12960, "last\_startTime": 1718000000000},
 
-      "klines":        {"new\_rows": 24, "total\_rows": 42000, "last\_startTime": 1718000000000}
+          "klines":        {"new\_rows": 24, "total\_rows": 42000, "last\_startTime": 1718000000000}
+
+        }
+
+      }
 
     }
-
-  }
-
-}
 
 ---
 
 ## Project Structure
 
-binance-futures-data-collector/
+    binance-futures-data-collector/
 
-├── src/
+    ├── src/
 
-│   └── binance-futures-data-collector.py   \# collector logic \+ Lambda entry point (lambda\_handler)
+    │   └── binance-futures-data-collector.py   \# collector logic \+ Lambda entry point (lambda\_handler)
 
-├── athena/
+    ├── athena/
 
-│   ├── tables/                             \# CREATE EXTERNAL TABLE per endpoint
+    │   ├── tables/                             \# CREATE EXTERNAL TABLE per endpoint
 
-│   │   ├── klines.sql
+    │   │   ├── klines.sql
 
-│   │   ├── index\_price\_klines.sql
+    │   │   ├── index\_price\_klines.sql
 
-│   │   ├── funding\_rate.sql
+    │   │   ├── funding\_rate.sql
 
-│   │   ├── open\_interest.sql
+    │   │   ├── open\_interest.sql
 
-│   │   ├── global\_ls\_account\_ratio.sql
+    │   │   ├── global\_ls\_account\_ratio.sql
 
-│   │   ├── top\_ls\_account\_ratio.sql
+    │   │   ├── top\_ls\_account\_ratio.sql
 
-│   │   └── top\_ls\_position\_ratio.sql
+    │   │   └── top\_ls\_position\_ratio.sql
 
-│   └── feature\_matrix\_view.sql             \# One Big Table: joined hourly feature matrix
+    │   └── feature\_matrix\_view.sql             \# One Big Table: joined hourly feature matrix
 
-├── README.md
+    ├── README.md
 
-├── requirements.txt
+    ├── requirements.txt
 
-└── LICENSE
+    └── LICENSE
 
 ---
 
