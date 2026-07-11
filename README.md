@@ -127,11 +127,11 @@ Each `_watermark/*.json` tracks incremental state for one symbol+endpoint:
 
       "endpoint": "openInterestHist",
 
-      "last\_startTime": 1718000000000,
+      "last_startTime": 1718000000000,
 
-      "update\_time": 1718003600000,
+      "update_time": 1718003600000,
 
-      "update\_time\_UTC": "2024-06-10T08:00:00+00:00"
+      "update_time_UTC": "2024-06-10T08:00:00+00:00"
 
     }
 
@@ -141,15 +141,15 @@ Each endpoint is stored in its own file with the raw columns Binance returns.
 
 **Klines** (`endpoint=klines`) — `ignore` column dropped:
 
-    open\_time · open · high · low · close · volume ·
+    open_time · open · high · low · close · volume ·
 
-    close\_time · quote\_volume · num\_trades ·
+    close_time · quote_volume · num_trades ·
 
-    taker\_buy\_base · taker\_buy\_quote
+    taker_buy_base · taker_buy_quote
 
 **Index price klines** (`endpoint=indexPriceKlines`):
 
-    open\_time · open · high · low · close · close\_time
+    open_time · open · high · low · close · close_time
 
 **Funding rate** (`endpoint=fundingRate`):
 
@@ -163,7 +163,7 @@ Each endpoint is stored in its own file with the raw columns Binance returns.
 
     symbol · longAccount · shortAccount · longShortRatio · timestamp
 
-For `topLongShortPositionRatio`, `longAccount`/`shortAccount` represent position share rather than account share.
+For `topLongShortPositionRatio`, `longAccount` and `shortAccount` represent position share rather than account share.
 
 All timestamp/time fields are Unix epoch **milliseconds (UTC)**.
 
@@ -179,7 +179,7 @@ Seven external tables (one per endpoint) sit over the S3 data, each using **part
 
 Example (funding rate):
 
-    CREATE EXTERNAL TABLE funding\_rate (
+    CREATE EXTERNAL TABLE funding_rate (
 
         fundingtime BIGINT,
 
@@ -193,15 +193,15 @@ Example (funding rate):
 
     STORED AS PARQUET
 
-    LOCATION 's3://\<your-bucket\>/binance-futures/endpoint=fundingRate/'
+    LOCATION 's3://<your-bucket>/binance-futures/endpoint=fundingRate/'
 
     TBLPROPERTIES (
 
-        'projection.enabled' \= 'true',
+        'projection.enabled' = 'true',
     
-        'projection.symbol.type'   \= 'enum',
+        'projection.symbol.type'   = 'enum',
 
-        'projection.symbol.values' \= \<your-symbol\>
+        'projection.symbol.values' = <your-symbol>
 
     );
 
@@ -224,29 +224,18 @@ Because the derivatives endpoints are capped at \~30 days, the joined feature ma
 
 The Lambda execution role needs read/write on the data prefix and list on the bucket:
 
-    \[
-
+    [
       {
-
         "Effect": "Allow",
-
-        "Action": \["s3:GetObject", "s3:PutObject"\],
-
-        "Resource": "arn:aws:s3:::your-bucket-name/binance-futures/\*"
-
+        "Action": ["s3:GetObject", "s3:PutObject"],
+        "Resource": "arn:aws:s3:::your-bucket-name/binance-futures/*"
       },
-
       {
-
         "Effect": "Allow",
-
         "Action": "s3:ListBucket",
-
         "Resource": "arn:aws:s3:::your-bucket-name"
-
       }
-
-    \]
+    ]
 
 ---
 
@@ -297,23 +286,23 @@ Because incremental fetching is watermark-driven (resume from `last_startTime`),
 - **No new data:** returns `"OK — no new data"` when the incremental fetch is empty.  
 - **Return body** always includes a per-symbol, per-endpoint summary:
 
-    {
+     {
 
       "summary": {
 
         "BTCUSDT": {
 
-          "open\_interest": {"new\_rows": 24, "total\_rows": 720,   "last\_startTime": 1718000000000},
+          "open_interest": {"new_rows": 24, "total_rows": 720,   "last_startTime": 1718000000000},
 
-          "fundingrate":   {"new\_rows": 3,  "total\_rows": 12960, "last\_startTime": 1718000000000},
+          "fundingrate":   {"new_rows": 3,  "total_rows": 12960, "last_startTime": 1718000000000},
 
-          "klines":        {"new\_rows": 24, "total\_rows": 42000, "last\_startTime": 1718000000000}
+          "klines":        {"new_rows": 24, "total_rows": 42000, "last_startTime": 1718000000000}
 
         }
 
       }
 
-    }
+     }
 
 ---
 
@@ -323,27 +312,27 @@ Because incremental fetching is watermark-driven (resume from `last_startTime`),
 
     ├── src/
 
-    │   └── binance-futures-data-collector.py   \# collector logic \+ Lambda entry point (lambda\_handler)
+    │   └── binance-futures-data-collector.py   # collector logic + Lambda entry point (lambda_handler)
 
     ├── athena/
 
-    │   ├── tables/                             \# CREATE EXTERNAL TABLE per endpoint
+    │   ├── tables/                             # CREATE EXTERNAL TABLE per endpoint
 
     │   │   ├── klines.sql
 
-    │   │   ├── index\_price\_klines.sql
+    │   │   ├── index_price_klines.sql
 
-    │   │   ├── funding\_rate.sql
+    │   │   ├── funding_rate.sql
 
-    │   │   ├── open\_interest.sql
+    │   │   ├── open_interest.sql
 
-    │   │   ├── global\_ls\_account\_ratio.sql
+    │   │   ├── global_ls_account_ratio.sql
 
-    │   │   ├── top\_ls\_account\_ratio.sql
+    │   │   ├── top_ls_account_ratio.sql
 
-    │   │   └── top\_ls\_position\_ratio.sql
+    │   │   └── top_ls_position_ratio.sql
 
-    │   └── feature\_matrix\_view.sql             \# One Big Table: joined hourly feature matrix
+    │   └── feature_matrix_view.sql             # One Big Table: joined hourly feature matrix
 
     ├── README.md
 
