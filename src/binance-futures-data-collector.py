@@ -21,12 +21,14 @@ PERIOD    = os.environ.get("PERIOD", "1h")
 # boto3 client created once at module level — reused across warm invocations
 s3 = boto3.client("s3")
 
-def clean_df(df, time_field, exclude=['symbol']):
+def clean_df(df, time_field):
     """Helper: deduplicate and convert to numeric. Shared by all fetch functions."""
     df = df.drop_duplicates(subset=time_field, keep='last')
     for col in df.columns:
-        if col not in exclude:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        try:
+            df[col] = pd.to_numeric(df[col], errors='raise')
+        except (ValueError, TypeError):
+            pass # leave non-numeric columns (like 'symbol') untouched
     return df
 
 def fetch_derivative(url, symbol, period, limit = 500, startTime = None):
@@ -41,7 +43,7 @@ def fetch_derivative(url, symbol, period, limit = 500, startTime = None):
     data = response.json()
     if response.status_code == 200:
         df = pd.DataFrame(data)
-        df = clean_df(df, time_field = 'timestamp', exclude =['symbol'])
+        df = clean_df(df, time_field = 'timestamp')
         return df
     else:
         print(f"Error: {response.status_code} - {data.get('msg', 'no message')}")
@@ -74,7 +76,7 @@ def fetch_fundingrate(url, symbol, limit = 1000, startTime = 1567641600000): # 2
         time.sleep(0.3)
 
     df = pd.DataFrame(record)
-    df = clean_df(df, time_field = 'fundingTime', exclude =['symbol'])
+    df = clean_df(df, time_field = 'fundingTime')
     return df
 
 def fetch_klines(url, symbol, interval, limit = 1500, startTime = 1567641600000): # 2019-09-05 (Binance futures launch)
