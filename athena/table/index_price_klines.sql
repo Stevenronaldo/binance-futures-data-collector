@@ -1,4 +1,4 @@
-CREATE EXTERNAL TABLE `index_price_klines` (
+CREATE EXTERNAL TABLE index_price_klines (
     open_time               BIGINT,
     open                    DOUBLE,
     high                    DOUBLE,
@@ -7,7 +7,7 @@ CREATE EXTERNAL TABLE `index_price_klines` (
     close_time              BIGINT
 )
 PARTITIONED BY (
-    symbol STRING
+    symbol  STRING
 )
 STORED AS PARQUET
 LOCATION 's3://<your-bucket>/binance-futures/endpoint=indexPriceKlines/'

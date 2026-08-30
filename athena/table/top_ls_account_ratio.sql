@@ -1,11 +1,11 @@
-CREATE EXTERNAL TABLE `top_ls_account_ratio` (
-  `timestamp` 		BIGINT, 
-  `longaccount` 	DOUBLE,
-  `longshortratio` 	DOUBLE,
-  `shortaccount` 	DOUBLE
+CREATE EXTERNAL TABLE top_ls_account_ratio (
+    longaccount 	    DOUBLE,
+    longshortratio 	    DOUBLE,
+    shortaccount 	    DOUBLE,
+    timestamp 		    BIGINT
 )
 PARTITIONED BY (
-    `symbol` string
+    symbol string
 )
 STORED AS PARQUET
 LOCATION 's3://<your-bucket>/binance-futures/endpoint=topLongShortAccountRatio/'

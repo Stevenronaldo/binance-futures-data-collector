@@ -1,10 +1,11 @@
-CREATE EXTERNAL TABLE `funding_rate` (
-    `fundingtime` 	BIGINT,
-    `fundingrate` 	DOUBLE,
-    `markprice` 	DOUBLE,
+CREATE EXTERNAL TABLE funding_rate (
+    fundingtime 	BIGINT,
+    fundingrate 	DOUBLE,
+    markprice 	    	DOUBLE,
+    ratetype        	STRING
 )
 PARTITIONED BY (
-    `symbol` string
+    symbol  STRING
 )
 STORED AS PARQUET
 LOCATION 's3://<your-bucket>/binance-futures/endpoint=fundingRate/'

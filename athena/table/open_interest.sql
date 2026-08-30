@@ -1,11 +1,11 @@
-CREATE EXTERNAL TABLE `open_interest` (
-  `timestamp`			BIGINT,
-  `sumopeninterest` 	 	DOUBLE,
-  `sumopeninterestvalue`	DOUBLE,
-  `cmccirculatingsupply`	DOUBLE
+CREATE EXTERNAL TABLE open_interest (
+    sumopeninterest 	 	DOUBLE,
+    sumopeninterestvalue	DOUBLE,
+    cmccirculatingsupply	DOUBLE,
+    timestamp			BIGINT
 )
 PARTITIONED BY (
-    `symbol` string
+    symbol  STRING
 )
 STORED AS PARQUET
 LOCATION 's3://<your-bucket>/binance-futures/endpoint=openInterestHist/'
