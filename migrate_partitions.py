@@ -52,7 +52,6 @@ def migrate_one(key, dry_run=True):
     obj = s3.get_object(Bucket=BUCKET, Key=key)
     df = pd.read_parquet(io.BytesIO(obj["Body"].read()))
 
-    # TODO: derive _year from time_field (UTC), group, drop _year, write each group
     df["_year"] = pd.to_datetime(df[time_field], unit="ms").dt.year
     print(f"  {endpoint}/{symbol}: {dict(df['_year'].value_counts().sort_index())}")
     rows_out = 0
