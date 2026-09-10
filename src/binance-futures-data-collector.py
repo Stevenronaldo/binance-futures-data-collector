@@ -8,6 +8,7 @@ import pandas as pd
 
 # Read from Lambda environment variables
 S3_BUCKET = os.environ["S3_BUCKET"]
+S3_PREFIX = os.environ.get("S3_PREFIX", "binance-futures")
 SYMBOLS = [s.strip() for s in os.environ["SYMBOLS"].split(",") if s.strip()]
 PERIOD = os.environ.get("PERIOD", "1h")
 SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
@@ -23,7 +24,7 @@ def clean_df(df, time_field):
         try:
             df[col] = pd.to_numeric(df[col], errors='raise')
         except (ValueError, TypeError):
-            pass  # leave non-numeric columns (like 'symbol') untouched
+            pass  #leave non-numeric columns (like 'symbol') untouched
     return df
 
 def error_check(data, status_code):
@@ -287,7 +288,7 @@ ENDPOINTS = [
 
 def fetch_process(url, symbol, fetch_func, time_field, period):
     endpoint = url.split('/')[-1]
-    watermark_key = f'binance-futures/_watermark/{symbol}-{endpoint}-period={period}.json'
+    watermark_key = f'{S3_PREFIX}/_watermark/{symbol}-{endpoint}-period={period}.json'
 
     try:
         current_watermark = read_watermark(S3_BUCKET, watermark_key)
@@ -308,11 +309,15 @@ def fetch_process(url, symbol, fetch_func, time_field, period):
             print(f"[{symbol}-{endpoint}] no new data")
             return {"status": "no_new_data"}
 
-        file_key = f"binance-futures/endpoint={endpoint}/symbol={symbol}/{symbol}-{endpoint}-period={period}.parquet"
-        total = upsert_to_s3(S3_BUCKET, file_key, df, time_field)
-        print(f"[{symbol}-{endpoint}-{period}] wrote {len(df)} new rows -> {total} total")
+        df["_year"] = pd.to_datetime(df[time_field], unit="ms").dt.year
+        total = 0
+        for year, group in df.groupby("_year"):
+            df_group = group.drop(columns=["_year"])
+            file_key = f"{S3_PREFIX}/endpoint={endpoint}/symbol={symbol}/year={year}/data.parquet"
+            total += upsert_to_s3(S3_BUCKET, file_key, df_group, time_field)
+            print(f"[{symbol}-{endpoint}-{year}] wrote {len(df_group)} new rows -> {total} total")
 
-        last_startTime = int(df[time_field].iloc[-1])
+        last_startTime = int(df[time_field].max())
         write_watermark(S3_BUCKET, watermark_key, endpoint, symbol, period, last_startTime)
 
         return {

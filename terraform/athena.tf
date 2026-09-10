@@ -12,16 +12,23 @@ resource "aws_glue_catalog_table" "funding_rate" {
     name = "symbol"
     type = "string"
   }
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
 
   parameters = {
     EXTERNAL                   = "TRUE"
     "projection.enabled"       = "true"
     "projection.symbol.type"   = "enum"
     "projection.symbol.values" = join(",", var.symbols)
+    "projection.year.type"     = "date"
+    "projection.year.format"   = "yyyy"
+    "projection.year.range"    = "2019,NOW"
   }
 
   storage_descriptor {
-    location      = "s3://${var.s3_bucket}/binance-futures/endpoint=fundingRate"
+    location      = "s3://${var.s3_bucket}/${var.s3_prefix}/endpoint=fundingRate"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
@@ -61,16 +68,23 @@ resource "aws_glue_catalog_table" "global_ls_account_ratio" {
     name = "symbol"
     type = "string"
   }
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
 
   parameters = {
     EXTERNAL                   = "TRUE"
     "projection.enabled"       = "true"
     "projection.symbol.type"   = "enum"
     "projection.symbol.values" = join(",", var.symbols)
+    "projection.year.type"     = "date"
+    "projection.year.format"   = "yyyy"
+    "projection.year.range"    = "2019,NOW"
   }
 
   storage_descriptor {
-    location      = "s3://${var.s3_bucket}/binance-futures/endpoint=globalLongShortAccountRatio"
+    location      = "s3://${var.s3_bucket}/${var.s3_prefix}/endpoint=globalLongShortAccountRatio"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
@@ -110,16 +124,23 @@ resource "aws_glue_catalog_table" "index_price_klines" {
     name = "symbol"
     type = "string"
   }
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
 
   parameters = {
     EXTERNAL                   = "TRUE"
     "projection.enabled"       = "true"
     "projection.symbol.type"   = "enum"
     "projection.symbol.values" = join(",", var.symbols)
+    "projection.year.type"     = "date"
+    "projection.year.format"   = "yyyy"
+    "projection.year.range"    = "2019,NOW"
   }
 
   storage_descriptor {
-    location      = "s3://${var.s3_bucket}/binance-futures/endpoint=indexPriceKlines"
+    location      = "s3://${var.s3_bucket}/${var.s3_prefix}/endpoint=indexPriceKlines"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
@@ -167,16 +188,23 @@ resource "aws_glue_catalog_table" "klines" {
     name = "symbol"
     type = "string"
   }
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
 
   parameters = {
     EXTERNAL                   = "TRUE"
     "projection.enabled"       = "true"
     "projection.symbol.type"   = "enum"
     "projection.symbol.values" = join(",", var.symbols)
+    "projection.year.type"     = "date"
+    "projection.year.format"   = "yyyy"
+    "projection.year.range"    = "2019,NOW"
   }
 
   storage_descriptor {
-    location      = "s3://${var.s3_bucket}/binance-futures/endpoint=klines"
+    location      = "s3://${var.s3_bucket}/${var.s3_prefix}/endpoint=klines"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
@@ -244,16 +272,23 @@ resource "aws_glue_catalog_table" "open_interest" {
     name = "symbol"
     type = "string"
   }
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
 
   parameters = {
     EXTERNAL                   = "TRUE"
     "projection.enabled"       = "true"
     "projection.symbol.type"   = "enum"
     "projection.symbol.values" = join(",", var.symbols)
+    "projection.year.type"     = "date"
+    "projection.year.format"   = "yyyy"
+    "projection.year.range"    = "2019,NOW"
   }
 
   storage_descriptor {
-    location      = "s3://${var.s3_bucket}/binance-futures/endpoint=openInterestHist"
+    location      = "s3://${var.s3_bucket}/${var.s3_prefix}/endpoint=openInterestHist"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
@@ -293,16 +328,23 @@ resource "aws_glue_catalog_table" "top_ls_account_ratio" {
     name = "symbol"
     type = "string"
   }
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
 
   parameters = {
     EXTERNAL                   = "TRUE"
     "projection.enabled"       = "true"
     "projection.symbol.type"   = "enum"
     "projection.symbol.values" = join(",", var.symbols)
+    "projection.year.type"     = "date"
+    "projection.year.format"   = "yyyy"
+    "projection.year.range"    = "2019,NOW"
   }
 
   storage_descriptor {
-    location      = "s3://${var.s3_bucket}/binance-futures/endpoint=topLongShortAccountRatio"
+    location      = "s3://${var.s3_bucket}/${var.s3_prefix}/endpoint=topLongShortAccountRatio"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
@@ -342,16 +384,23 @@ resource "aws_glue_catalog_table" "top_ls_position_ratio" {
     name = "symbol"
     type = "string"
   }
+  partition_keys {
+    name = "year"
+    type = "int"
+  }
 
   parameters = {
     EXTERNAL                   = "TRUE"
     "projection.enabled"       = "true"
     "projection.symbol.type"   = "enum"
     "projection.symbol.values" = join(",", var.symbols)
+    "projection.year.type"     = "date"
+    "projection.year.format"   = "yyyy"
+    "projection.year.range"    = "2019,NOW"
   }
 
   storage_descriptor {
-    location      = "s3://${var.s3_bucket}/binance-futures/endpoint=topLongShortPositionRatio"
+    location      = "s3://${var.s3_bucket}/${var.s3_prefix}/endpoint=topLongShortPositionRatio"
     input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 

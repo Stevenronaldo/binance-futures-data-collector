@@ -9,6 +9,12 @@ variable "s3_bucket" {
   type        = string
 }
 
+variable "s3_prefix" {
+  description = "S3 bucket prefix"
+  type        = string
+  default     = "binance-futures"
+}
+
 variable "sns_email" {
   description = "email to receive sns notification"
   type        = string
