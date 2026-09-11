@@ -7,10 +7,17 @@ CREATE EXTERNAL TABLE top_ls_account_ratio (
 PARTITIONED BY (
     symbol string
 )
+PARTITIONED BY (
+    year  INT
+)
+
 STORED AS PARQUET
 LOCATION 's3://<your-bucket>/binance-futures/endpoint=topLongShortAccountRatio/'
 TBLPROPERTIES (
     'projection.enabled'='true',
     'projection.symbol.type'='enum',
     'projection.symbol.values'=<your-symbols>
+    'projection.year.type'     = 'date'
+    'projection.year.format'   = 'yyyy'
+    'projection.year.range'    = '2019,NOW'
 );
