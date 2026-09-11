@@ -13,9 +13,7 @@ CREATE EXTERNAL TABLE klines (
 )
 PARTITIONED BY (
     symbol STRING
-)
-PARTITIONED BY (
-    year  INT
+    year  STRING
 )
 
 STORED AS PARQUET

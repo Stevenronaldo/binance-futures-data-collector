@@ -6,9 +6,7 @@ CREATE EXTERNAL TABLE top_ls_account_ratio (
 )
 PARTITIONED BY (
     symbol string
-)
-PARTITIONED BY (
-    year  INT
+    year  STRING
 )
 
 STORED AS PARQUET

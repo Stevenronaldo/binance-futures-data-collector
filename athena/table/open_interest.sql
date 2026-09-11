@@ -6,9 +6,7 @@ CREATE EXTERNAL TABLE open_interest (
 )
 PARTITIONED BY (
     symbol  STRING
-)
-PARTITIONED BY (
-    year  INT
+    year  STRING
 )
 
 STORED AS PARQUET

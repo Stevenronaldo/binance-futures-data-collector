@@ -6,9 +6,7 @@ CREATE EXTERNAL TABLE top_ls_position_ratio (
 )
 PARTITIONED BY (
     symbol STRING
-)
-PARTITIONED BY (
-    year  INT
+    year  STRING
 )
 
 STORED AS PARQUET

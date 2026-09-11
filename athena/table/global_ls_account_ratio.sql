@@ -6,10 +6,9 @@ CREATE EXTERNAL TABLE global_ls_account_ratio (
 )
 PARTITIONED BY (
     symbol STRING
+    year  STRING
 )
-PARTITIONED BY (
-    year  INT
-)
+
 STORED AS PARQUET
 LOCATION 's3://<your-bucket>/binance-futures/endpoint=globalLongShortAccountRatio/'
 TBLPROPERTIES (
