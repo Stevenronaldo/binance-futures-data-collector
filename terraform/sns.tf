@@ -2,10 +2,13 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint             = var.sns_email
   protocol             = "email"
   raw_message_delivery = false
-  topic_arn            = aws_sns_topic.errors.arn
+  topic_arn            = aws_sns_topic.lambda_error_notification.arn
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-resource "aws_sns_topic" "errors" {
+resource "aws_sns_topic" "lambda_error_notification" {
   content_based_deduplication = false
   fifo_topic                  = false
   name                        = "lambda-error-notification"

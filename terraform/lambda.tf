@@ -11,7 +11,7 @@ resource "aws_lambda_function_event_invoke_config" "collector" {
   maximum_retry_attempts = 2
   destination_config {
     on_failure {
-      destination = aws_sns_topic.errors.arn
+      destination = aws_sns_topic.lambda_error_notification.arn
     }
   }
 }
@@ -36,7 +36,7 @@ resource "aws_lambda_function" "collector" {
       PERIOD        = var.period
       S3_BUCKET     = var.s3_bucket
       S3_PREFIX     = var.s3_prefix
-      SNS_TOPIC_ARN = aws_sns_topic.errors.arn
+      SNS_TOPIC_ARN = aws_sns_topic.lambda_error_notification.arn
       SYMBOLS       = join(",", var.symbols)
     }
   }

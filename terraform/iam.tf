@@ -15,7 +15,7 @@ resource "aws_iam_role_policy" "s3_access" {
     Statement = [{
       Action   = ["s3:GetObject", "s3:PutObject"]
       Effect   = "Allow"
-      Resource = "arn:aws:s3:::${var.s3_bucket}/binance-futures/*"
+      Resource = "arn:aws:s3:::${var.s3_bucket}/${var.s3_prefix}/*"
       }, {
       Action   = "s3:ListBucket"
       Effect   = "Allow"
@@ -33,7 +33,7 @@ resource "aws_iam_policy" "sns_destination" {
     Statement = [{
       Action   = "sns:Publish"
       Effect   = "Allow"
-      Resource = aws_sns_topic.errors.arn
+      Resource = aws_sns_topic.lambda_error_notification.arn
     }]
     Version = "2012-10-17"
   })
