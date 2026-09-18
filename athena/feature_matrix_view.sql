@@ -2,52 +2,52 @@ CREATE VIEW binance_futures.feature_matrix AS
 WITH fr_data AS( 
     SELECT 
         symbol, 
-        (fundingtime / 3600000) * 3600000 as fundingtime, 
+        ((fundingtime + 3600000 / 5) / 3600000) * 3600000 as fundingtime,
         fundingrate 
-    FROM funding_rate
+    FROM binance_futures.funding_rate
 ),
 gls_acc AS(
     SELECT 
         symbol, 
-        (timestamp / 3600000) * 3600000 as timestamp,
+         "timestamp",
         longshortratio as global_ls_acc_ratio 
-    FROM global_ls_account_ratio
+    FROM binance_futures.global_ls_account_ratio
 ),
 index_data AS(
     SELECT 
         symbol, 
-        (open_time / 3600000) * 3600000 as open_time,
+        open_time,
         close as index_close
-    FROM index_price_klines
+    FROM binance_futures.index_price_klines
 ),
 klines_data AS(
     SELECT 
         symbol, 
-        (open_time / 3600000) * 3600000 as open_time,
+        open_time,
         open, high, low, close, volume, num_trades, 
-        ROUND((taker_buy_base / (volume - taker_buy_base)),4) as taker_ls_ratio
-    FROM klines
+        ROUND((taker_buy_base / NULLIF(volume - taker_buy_base, 0)), 4) AS taker_ls_ratio
+    FROM binance_futures.klines
 ),
 oi_data AS(
     SELECT 
         symbol, 
-        (timestamp / 3600000) * 3600000 as timestamp,
+        "timestamp",
         sumopeninterest
-    FROM open_interest 
+    FROM binance_futures.open_interest
 ),
 tls_acc AS(
     SELECT 
         symbol, 
-        (timestamp / 3600000) * 3600000 as timestamp,
+        "timestamp",
         longshortratio as top_ls_acc_ratio
-    FROM top_ls_account_ratio
+    FROM binance_futures.top_ls_account_ratio
 ),
 tls_pos AS(
     SELECT 
         symbol, 
-        (timestamp / 3600000) * 3600000 as timestamp,
+        "timestamp",
         longshortratio as top_ls_pos_ratio
-    FROM top_ls_position_ratio
+    FROM binance_futures.top_ls_position_ratio
 ),
 joined AS(
     SELECT
@@ -65,13 +65,13 @@ joined AS(
     JOIN index_data i
         ON k.symbol = i.symbol AND k.open_time = i.open_time
     JOIN oi_data oi
-        ON k.symbol = oi.symbol AND k.open_time = oi.timestamp
+        ON k.symbol = oi.symbol AND k.open_time = oi."timestamp"
     JOIN gls_acc g
-        ON k.symbol = g.symbol AND k.open_time = g.timestamp
+        ON k.symbol = g.symbol AND k.open_time = g."timestamp"
     JOIN tls_acc ta
-        ON k.symbol = ta.symbol AND k.open_time = ta.timestamp
+        ON k.symbol = ta.symbol AND k.open_time = ta."timestamp"
     JOIN tls_pos tp
-        ON k.symbol = tp.symbol AND k.open_time = tp.timestamp
+        ON k.symbol = tp.symbol AND k.open_time = tp."timestamp"
     LEFT JOIN fr_data fr 
         ON k.symbol = fr.symbol AND k.open_time = fr.fundingtime
 )
