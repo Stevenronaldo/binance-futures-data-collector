@@ -29,25 +29,12 @@ def clean_df(df, time_field):
 
 def error_check(data, status_code):
     if status_code != 200:
-        error_msg = f"Error: {status_code} - {data.get('msg', 'no message')}"
-        print(error_msg)
-        try:
-            sns.publish(
-                TopicArn=SNS_TOPIC_ARN,
-                Subject="Binance collector — endpoint failure",
-                Message= error_msg
-            )
-        except Exception as e:
-            print(f"alert failed: {e}")
-        return True
-    else:
-        return False
+        raise Exception(f"HTTP {status_code} - {data.get('msg', 'no message')}")
 
-def fetch_derivative(url, symbol, period, startTime=None, limit=500):
-    """
-    fetch derivative data from binance API [/futures/data/]
-    Return data as dataframe
-    """
+def calculate_period_ms(period):
+    if period is None:
+        return None
+
     unit = period[-1]        # last character: 'm', 'h', 'd', 'w'
     value = int(period[:-1]) # everything before it: '15', '1', '4'
 
@@ -57,7 +44,53 @@ def fetch_derivative(url, symbol, period, startTime=None, limit=500):
         'd': 24 * 60 * 60 * 1000, # day
         'w': 7 * 24 * 60 * 60 * 1000,  # week
     }
-    period_ms = value * unit_ms[unit]
+    return value * unit_ms[unit]
+
+def quality_check(endpoint, symbol, df, time_field, period_ms, prev_watermark):
+    issues = []
+
+    def round_ms(ts, unit_ms):
+        # keep in sync with feature_matrix view
+        return (ts + unit_ms // 5) // unit_ms * unit_ms
+
+    if period_ms is None:            # fundingRate: interval can change
+        round_unit = 3_600_000         # settlements are always on whole hours
+        max_gap = 8 * round_unit        # no interval is longer than 8h
+        max_age = 9 * round_unit
+    else:
+        round_unit = period_ms
+        max_gap = period_ms
+        max_age = 2 * period_ms
+
+    col = df[time_field] if time_field in df.columns else pd.Series(dtype="int64")
+    ts = round_ms(col.dropna().astype("int64"), round_unit)
+
+    if prev_watermark is not None:
+        wm = pd.Series([round_ms(int(prev_watermark), round_unit)])
+        ts = pd.concat([wm, ts], ignore_index=True)
+    ts = ts.sort_values().drop_duplicates().reset_index(drop=True)
+
+    if ts.empty:
+        return [f"[{symbol}-{endpoint}] Quality: no data"]
+
+    gaps = ts.diff()
+    bad = gaps[gaps.notna() & (gaps > max_gap)]
+    for i in bad.index:
+        issues.append(f"[{symbol}-{endpoint}] Quality: gap {pd.to_datetime(ts[i-1], unit ='ms')} -> {pd.to_datetime(ts[i], unit ='ms')}")
+
+    now_ms = int(time.time() * 1000)
+    if now_ms - ts.iloc[-1] > max_age:
+        issues.append(f"[{symbol}-{endpoint}] Quality: stale, latest {pd.to_datetime(ts.iloc[-1], unit ='ms')}")
+
+    return issues
+
+
+def fetch_derivative(url, symbol, period, startTime=None, limit=500):
+    """
+    fetch derivative data from binance API [/futures/data/]
+    Return data as dataframe
+    """
+    period_ms = calculate_period_ms(period)
 
     if startTime is None:
         now_ms = int(time.time() * 1000)
@@ -80,8 +113,7 @@ def fetch_derivative(url, symbol, period, startTime=None, limit=500):
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
-        if error_check(data, response.status_code) is True:
-            return None
+        error_check(data, response.status_code)
         if not data:
             break
 
@@ -109,6 +141,7 @@ def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
     """
     if startTime is None:
         startTime = 1567641600000  #2019-09-05 (Binance futures launch)
+
     print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     record = []
     while True:
@@ -116,8 +149,7 @@ def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
-        if error_check(data, response.status_code) is True:
-            return None
+        error_check(data, response.status_code)
         if not data:
             break
 
@@ -145,14 +177,15 @@ def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
     """
     if startTime is None:
         startTime = 1567641600000  #2019-09-05 (Binance futures launch)
+
     print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     record = []
     while True:
         params = {'symbol': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
-        if error_check(data, response.status_code) is True:
-            return None
+
+        error_check(data, response.status_code)
         if not data:
             break
 
@@ -187,14 +220,15 @@ def fetch_indexprice(url, symbol, period=None, startTime=None, limit=1500):
     """
     if startTime is None:
         startTime = 1567641600000  #2019-09-05 (Binance futures launch)
+
     print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     record = []
     while True:
         params = {'pair': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
-        if error_check(data, response.status_code) is True:
-            return None
+
+        error_check(data, response.status_code)
         if not data:
             break
 
@@ -289,6 +323,8 @@ ENDPOINTS = [
 def fetch_process(url, symbol, fetch_func, time_field, period):
     endpoint = url.split('/')[-1]
     watermark_key = f'{S3_PREFIX}/_watermark/{symbol}-{endpoint}-period={period}.json'
+    error_issues = []
+    quality_issues = []
 
     try:
         current_watermark = read_watermark(S3_BUCKET, watermark_key)
@@ -302,12 +338,16 @@ def fetch_process(url, symbol, fetch_func, time_field, period):
 
         df = fetch_func(url, symbol, period=period, startTime=startTime)
 
-        if df is None:
-            print(f"[{symbol}-{endpoint}] fetch failed — skipping")
-            return {"status": "fetch_failed"}
+        period_ms = calculate_period_ms(period)
+        prev_ts = current_watermark["last_startTime"] if current_watermark else None
+        try:
+            quality_issues = quality_check(endpoint, symbol, df, time_field, period_ms, prev_ts)
+        except Exception as e:
+            error_issues.append(f"[{symbol}-{endpoint}] Error: quality check failed: {e}")
+
         if df.empty:
             print(f"[{symbol}-{endpoint}] no new data")
-            return {"status": "no_new_data"}
+            return {"status": "no_new_data"}, quality_issues, error_issues
 
         df["_year"] = pd.to_datetime(df[time_field], unit="ms").dt.year
         total = 0
@@ -320,16 +360,18 @@ def fetch_process(url, symbol, fetch_func, time_field, period):
         last_startTime = int(df[time_field].max())
         write_watermark(S3_BUCKET, watermark_key, endpoint, symbol, period, last_startTime)
 
-        return {
+        return ({
             "status": "ok",
             "new_rows": len(df),
             "total_rows": total,
             "last_startTime": last_startTime,
         }
+            , quality_issues, error_issues
+        )
 
     except Exception as e:
-        print(f"[{symbol}-{endpoint}] FAILED: {e}")
-        return {"status": "error", "error": str(e)}
+        error_issues.append(f"[{symbol}-{endpoint}] FAILED: {e}")
+        return {"status": "error", "error": str(e)}, quality_issues, error_issues
 
 
 # ─── Lambda entry point ──────────────────────────────────────────────────────
@@ -337,6 +379,8 @@ def lambda_handler(event, context):
     print(f"Start: symbols={SYMBOLS} period={PERIOD}")
     summary = {}
     stopped_early = False
+    all_quality_issues = []
+    all_error_issues = []
 
     for symbol in SYMBOLS:
         summary[symbol] = {}
@@ -344,13 +388,22 @@ def lambda_handler(event, context):
             if context.get_remaining_time_in_millis() < 30_000:
                 print("Time budget exhausted — stopping cleanly")
                 stopped_early = True
+                all_error_issues.append(f"[{symbol}-{name}] Error: stopped early, remaining {context.get_remaining_time_in_millis()} ms")
                 break
-            summary[symbol][name] = fetch_process(url, symbol, fetch_func, time_field, period)
+            summary[symbol][name], quality_issues, error_issues = fetch_process(url, symbol, fetch_func, time_field, period)
+            all_quality_issues.extend(quality_issues)
+            all_error_issues.extend(error_issues)
         if stopped_early:
             break
+
+    if all_quality_issues or all_error_issues:
+        sns.publish(TopicArn=SNS_TOPIC_ARN,
+                    Subject=f"Binance collector: {len(all_error_issues)} error & {len(all_quality_issues)} quality issues",
+                    Message="\n".join(all_error_issues + all_quality_issues)
+                    )
 
     print(f"Done: {summary}")
     return {
         "statusCode": 200,
-        "body": json.dumps({"summary": summary, "stopped_early": stopped_early}),
+        "body": json.dumps({"summary": summary, "stopped_early": stopped_early})
     }
