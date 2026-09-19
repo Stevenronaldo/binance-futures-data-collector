@@ -134,9 +134,8 @@ Each endpoint is stored with the raw columns Binance returns.
 **Klines** (`endpoint=klines`) — `ignore` column dropped:
 
 ```
-open_time · open · high · low · close · volume ·
-close_time · quote_volume · num_trades ·
-taker_buy_base · taker_buy_quote
+open_time · open · high · low · close · volume · close_time · 
+quote_volume · num_trades · taker_buy_base · taker_buy_quote
 ```
 
 **Index price klines** (`endpoint=indexPriceKlines`):
@@ -395,7 +394,7 @@ binance-futures-data-collector/
 ├── terraform/
 │   ├── version.tf · providers.tf · variables.tf · data.tf
 │   ├── lambda.tf · iam.tf · events.tf · logs.tf · sns.tf
-│   ├── athena.tf #(Glue database + tables)
+│   ├── athena.tf                           # Glue database + tables
 │   └── terraform.tfvars.example
 ├── README.md
 ├── requirements.txt
