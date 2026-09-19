@@ -23,7 +23,12 @@ variable "sns_email" {
 variable "symbols" {
   description = "Futures symbols to collect"
   type        = list(string)
-  default     = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "HYPEUSDT", "XRPUSDT"]
+  default = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "HYPEUSDT", "XRPUSDT",
+    "TRXUSDT", "ZECUSDT", "DOGEUSDT", "XMRUSDT", "LINKUSDT", "ADAUSDT",
+    "XLMUSDT", "UNIUSDT", "BCHUSDT", "NEARUSDT", "LTCUSDT", "AVAXUSDT",
+    "SUIUSDT", "TAOUSDT", "AAVEUSDT", "ASTERUSDT", "PUMPUSDT", "ONDOUSDT",
+    "DOTUSDT", "ENAUSDT", "PEPEUSDT", "WLDUSDT", "ARBUSDT", "POLUSDT"
+  ]
 }
 
 variable "period" {
