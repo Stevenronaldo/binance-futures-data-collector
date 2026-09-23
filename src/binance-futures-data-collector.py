@@ -85,27 +85,27 @@ def quality_check(endpoint, symbol, df, time_field, period_ms, prev_watermark):
     return issues
 
 
-def fetch_derivative(url, symbol, period, start_time=None, limit=500):
+def fetch_derivative(url, symbol, period, startTime=None, limit=500):
     """
     fetch derivative data from binance API [/futures/data/]
     Return data as dataframe
     """
     period_ms = calculate_period_ms(period)
 
-    if start_time is None:
+    if startTime is None:
         now_ms = int(time.time() * 1000)
         thirty_days_ms = 30 * 24 * 60 * 60 * 1000
-        start_time = now_ms - thirty_days_ms
+        startTime = now_ms - thirty_days_ms
 
     record = []
-    print(f"----Fetching {symbol}_{period}_URL:{url} [start_time: {pd.to_datetime(start_time, unit='ms')}]----")
+    print(f"----Fetching {symbol}_{period}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     while True:
-        endTime = start_time + period_ms * limit
+        endTime = startTime + period_ms * limit
         now_ms = int(time.time() * 1000)
         page_limit = limit
         if endTime > now_ms:
               endTime = now_ms
-              page_limit = int((endTime - start_time)/period_ms)
+              page_limit = int((endTime - startTime)/period_ms)
               if page_limit < 1:
                   break
 
@@ -124,7 +124,7 @@ def fetch_derivative(url, symbol, period, start_time=None, limit=500):
         if len(data) < limit:
             break
 
-        start_time = data[-1]["timestamp"] + 1
+        startTime = data[-1]["timestamp"] + 1
         time.sleep(0.3)
 
     if record:
@@ -134,18 +134,18 @@ def fetch_derivative(url, symbol, period, start_time=None, limit=500):
     else:
         return pd.DataFrame()
 
-def fetch_fundingrate(url, symbol, period=None, start_time=None, limit=1000):
+def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
     """
     fetch fundingrate data from binance API [/fapi/v1/fundingRate]
     Return data as dataframe
     """
-    if start_time is None:
-        start_time = 1567641600000  #2019-09-05 (Binance futures launch)
+    if startTime is None:
+        startTime = 1567641600000  #2019-09-05 (Binance futures launch)
 
-    print(f"----Fetching {symbol}_URL:{url} [start_time: {pd.to_datetime(start_time, unit='ms')}]----")
+    print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     record = []
     while True:
-        params = {"symbol": symbol, "start_time": start_time, "limit": limit}
+        params = {"symbol": symbol, "startTime": startTime, "limit": limit}
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
@@ -160,7 +160,7 @@ def fetch_fundingrate(url, symbol, period=None, start_time=None, limit=1000):
         if len(data) < limit:
             break
 
-        start_time = data[-1]["fundingTime"] + 1
+        startTime = data[-1]["fundingTime"] + 1
         time.sleep(0.3)
 
     if record:
@@ -170,18 +170,18 @@ def fetch_fundingrate(url, symbol, period=None, start_time=None, limit=1000):
     else:
         return pd.DataFrame()
 
-def fetch_klines(url, symbol, period=None, start_time=None, limit=1500):
+def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
     """
     fetch kline data from binance API [/fapi/v1/klines]
     Return data as dataframe
     """
-    if start_time is None:
-        start_time = 1567641600000  #2019-09-05 (Binance futures launch)
+    if startTime is None:
+        startTime = 1567641600000  #2019-09-05 (Binance futures launch)
 
-    print(f"----Fetching {symbol}_URL:{url} [start_time: {pd.to_datetime(start_time, unit='ms')}]----")
+    print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     record = []
     while True:
-        params = {'symbol': symbol, 'interval': period, 'start_time': start_time, 'limit': limit}
+        params = {'symbol': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
@@ -195,7 +195,7 @@ def fetch_klines(url, symbol, period=None, start_time=None, limit=1500):
         if len(data) < limit:
             break
 
-        start_time = data[-1][0] + 1
+        startTime = data[-1][0] + 1
         time.sleep(0.3)
 
     klines_columns = ['open_time', 'open', 'high', 'low', 'close', 'volume',
@@ -213,18 +213,18 @@ def fetch_klines(url, symbol, period=None, start_time=None, limit=1500):
 
     return df
 
-def fetch_indexprice(url, symbol, period=None, start_time=None, limit=1500):
+def fetch_indexprice(url, symbol, period=None, startTime=None, limit=1500):
     """
     fetch index price klines data from binance API [/fapi/v1/indexPriceKlines]
     Return data as dataframe
     """
-    if start_time is None:
-        start_time = 1567641600000  #2019-09-05 (Binance futures launch)
+    if startTime is None:
+        startTime = 1567641600000  #2019-09-05 (Binance futures launch)
 
-    print(f"----Fetching {symbol}_URL:{url} [start_time: {pd.to_datetime(start_time, unit='ms')}]----")
+    print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     record = []
     while True:
-        params = {'pair': symbol, 'interval': period, 'start_time': start_time, 'limit': limit}
+        params = {'pair': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
@@ -238,7 +238,7 @@ def fetch_indexprice(url, symbol, period=None, start_time=None, limit=1500):
         if len(data) < limit:
             break
 
-        start_time = data[-1][0] + 1
+        startTime = data[-1][0] + 1
         time.sleep(0.3)
 
     if record:
@@ -263,7 +263,7 @@ def read_watermark(bucket, key):
         return None
 
 # write watermark
-def write_watermark(bucket, key, endpoint, symbol, period, last_start_time):
+def write_watermark(bucket, key, endpoint, symbol, period, last_startTime):
     """
     write watermark of endpoint to S3 (JSON file)
     each file for each symbol and endpoint
@@ -272,7 +272,7 @@ def write_watermark(bucket, key, endpoint, symbol, period, last_start_time):
         'symbol': symbol,
         'period': period,
         'endpoint': endpoint,
-        'last_start_time': last_start_time,
+        'last_startTime': last_startTime,
         'update_time': int(time.time() * 1000),
         'update_time_UTC': pd.Timestamp.now(tz='UTC').isoformat()
     }
@@ -331,15 +331,15 @@ def fetch_process(url, symbol, fetch_func, time_field, period):
 
         if current_watermark is None:
             print(f'---first run {symbol}-{endpoint}-period={period}---')
-            start_time = None
+            startTime = None
         else:
-            start_time = current_watermark['last_start_time'] + 1
-            print(f'---fetching {symbol}-{endpoint}-period={period} from {pd.to_datetime(start_time, unit="ms")}---')
+            startTime = current_watermark['last_startTime'] + 1
+            print(f'---fetching {symbol}-{endpoint}-period={period} from {pd.to_datetime(startTime, unit="ms")}---')
 
-        df = fetch_func(url, symbol, period=period, start_time=start_time)
+        df = fetch_func(url, symbol, period=period, startTime=startTime)
 
         period_ms = calculate_period_ms(period)
-        prev_ts = current_watermark["last_start_time"] if current_watermark else None
+        prev_ts = current_watermark["last_startTime"] if current_watermark else None
         try:
             quality_issues = quality_check(endpoint, symbol, df, time_field, period_ms, prev_ts)
         except Exception as e:
@@ -357,14 +357,14 @@ def fetch_process(url, symbol, fetch_func, time_field, period):
             total += upsert_to_s3(S3_BUCKET, file_key, df_group, time_field)
             print(f"[{symbol}-{endpoint}-{year}] wrote {len(df_group)} new rows -> {total} total")
 
-        last_start_time = int(df[time_field].max())
-        write_watermark(S3_BUCKET, watermark_key, endpoint, symbol, period, last_start_time)
+        last_startTime = int(df[time_field].max())
+        write_watermark(S3_BUCKET, watermark_key, endpoint, symbol, period, last_startTime)
 
         return ({
             "status": "ok",
             "new_rows": len(df),
             "total_rows": total,
-            "last_start_time": last_start_time,
+            "last_startTime": last_startTime,
         }
             , quality_issues, error_issues
         )
