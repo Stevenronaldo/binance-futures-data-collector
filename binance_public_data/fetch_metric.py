@@ -6,8 +6,13 @@ import hashlib
 import zipfile
 import traceback
 import pandas as pd
-from datetime import timedelta, date
 import xml.etree.ElementTree as ET
+import sys
+from datetime import timedelta, date
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from utils import upsert_to_s3, calculate_period_ms
 
 aws_lambda = boto3.client("lambda", region_name="ap-southeast-1")
 s3 = boto3.client("s3", region_name="ap-southeast-1")
@@ -16,20 +21,6 @@ lambda_function = "binance-futures-collector"
 BUCKET_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 S3_NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 BASE_URL = "https://data.binance.vision/data/futures/um/daily/metrics"
-
-def calculate_period_ms(period):
-    if period is None:
-        return None
-
-    unit = period[-1]        # last character: 'm', 'h', 'd'
-    value = int(period[:-1]) # everything before it: '15', '1', '4'
-
-    unit_ms = {
-        'm': 60 * 1000,           # minute
-        'h': 60 * 60 * 1000,      # hour
-        'd': 24 * 60 * 60 * 1000, # day
-    }
-    return value * unit_ms[unit]
 
 def get_variables(lambda_function):
     """
@@ -170,29 +161,6 @@ def read_parquet_from_s3(bucket, key):
     data = obj["Body"].read()
     return pd.read_parquet(io.BytesIO(data))
 
-def upsert_to_s3(bucket, key, new_df, time_field):
-    try:
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        existing = pd.read_parquet(io.BytesIO(obj["Body"].read()))
-
-        combined = pd.concat([existing, new_df])
-        combined = combined.drop_duplicates(subset=time_field, keep="last").sort_values(time_field)
-
-    except s3.exceptions.NoSuchKey:
-        combined = new_df  # First write — no existing file
-
-    buf = io.BytesIO()
-    combined.to_parquet(buf, engine="pyarrow", index=False)
-    buf.seek(0)
-
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=buf.getvalue(),
-        ContentType="application/octet-stream",
-    )
-    return len(combined)
-  
 ENDPOINTS = {
     "openInterestHist": {
         "sum_open_interest": "sumOpenInterest",
@@ -297,7 +265,7 @@ if __name__ == "__main__":
                     for year, group in sorted(endpoint_df.groupby("_year"), reverse=True):
                         df_group = group.drop(columns=["_year"]).sort_values("timestamp")
                         file_key = f"{s3_prefix}/endpoint={endpoint}/symbol={symbol}/year={year}/data.parquet"
-                        total = upsert_to_s3(s3_bucket, file_key, df_group, "timestamp")
+                        total = upsert_to_s3(s3, s3_bucket, file_key, df_group, "timestamp")
 
                         first = pd.to_datetime(df_group["timestamp"].min(), unit="ms", utc=True)
                         last = pd.to_datetime(df_group["timestamp"].max(), unit="ms", utc=True)
