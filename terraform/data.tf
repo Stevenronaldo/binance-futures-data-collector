@@ -3,8 +3,13 @@ data "archive_file" "lambda" {
   output_path = "${path.module}/build/lambda_function.zip"
 
   source {
-    content  = file("${path.module}/../src/binance-futures-data-collector.py")
+    content  = file("${path.module}/../src/lambda_function.py")
     filename = "lambda_function.py"
+  }
+
+  source {
+    content  = file("${path.module}/../src/utils.py")
+    filename = "utils.py"
   }
 }
 

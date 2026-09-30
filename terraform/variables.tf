@@ -35,6 +35,11 @@ variable "period" {
   description = "Candle/aggregation period"
   type        = string
   default     = "1h"
+
+  validation {
+    condition     = contains(["5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"], var.period)
+    error_message = "period must be one that all collected endpoints accept."
+  }
 }
 
 variable "lambda_layers" {
