@@ -28,7 +28,6 @@ def list_parquet_keys():
             if key.endswith(".parquet") and "_watermark" not in key:
                 yield key
 
-
 def parse_key(key):
     """
     'binance-futures/endpoint=klines/symbol=BTCUSDT/BTCUSDT-klines-period=1h.parquet'
