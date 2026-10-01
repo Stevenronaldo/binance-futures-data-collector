@@ -24,6 +24,7 @@ resource "aws_lambda_function" "collector" {
   layers                         = var.lambda_layers
   memory_size                    = 512
   package_type                   = "Zip"
+  # REVIEW #4: -1 = unlimited concurrency -> overlapping runs can overwrite each other's upserts (see src/utils.py).
   reserved_concurrent_executions = -1
   role                           = aws_iam_role.lambda_exec.arn
   runtime                        = "python3.14"

@@ -2,6 +2,8 @@ resource "aws_glue_catalog_database" "binance_futures" {
   name = "binance_futures"
 }
 
+# REVIEW #6: every table below uses year type "int" + "date" projection without interval/interval.unit,
+# while README + athena/table/*.sql use STRING. Verify which works (WHERE year = ... prunes?) and make all 3 match.
 resource "aws_glue_catalog_table" "funding_rate" {
   name          = "funding_rate"
   database_name = aws_glue_catalog_database.binance_futures.name

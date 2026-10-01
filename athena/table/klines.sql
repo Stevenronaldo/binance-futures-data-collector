@@ -1,3 +1,6 @@
+-- REVIEW #5 (all files in athena/table/): this DDL would not run:
+--   missing commas in PARTITIONED BY + TBLPROPERTIES, <your-symbols> unquoted,
+--   year STRING here vs int in terraform/athena.tf (see REVIEW #6).
 CREATE EXTERNAL TABLE klines (
   open_time		BIGINT,
   open			DOUBLE,

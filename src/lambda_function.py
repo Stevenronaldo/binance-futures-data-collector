@@ -2,6 +2,7 @@ import requests
 import os
 import json
 import time
+import math
 import boto3
 import pandas as pd
 from utils import calculate_period_ms, upsert_to_s3
@@ -20,13 +21,20 @@ sns = boto3.client("sns")
 def clean_df(df, time_field):
     """Helper: deduplicate and convert to numeric. Shared by all fetch functions."""
     df = df.drop_duplicates(subset=time_field, keep='last')
+    # REVIEW #2: types are GUESSED per batch. If one value can't convert (e.g. markPrice ""),
+    # the whole column silently stays string -> Parquet schema drifts -> Athena HIVE_BAD_DATA.
+    # Hint: declare an explicit schema per endpoint {col: dtype} and cast to it; fail loudly.
     for col in df.columns:
         try:
             df[col] = pd.to_numeric(df[col], errors='raise')
         except (ValueError, TypeError):
-            pass  #leave non-numeric columns (like 'symbol') untouched
+            pass  #leave non-numeric columns (like 'symbol') untouched  # REVIEW #2: silent failure
     return df
 
+# REVIEW #3: callers run response.json() BEFORE this check -> an HTML error page (502)
+# raises a confusing JSONDecodeError. data.get() also crashes if data is a list.
+# No retry: one 429/5xx fails the endpoint for the whole day.
+# Hint: one helper get_json(session, url, params) that checks status first + retries with backoff.
 def error_check(data, status_code):
     if status_code != 200:
         raise Exception(f"HTTP {status_code} - {data.get('msg', 'no message')}")
@@ -75,40 +83,48 @@ def fetch_derivative(url, symbol, period, startTime=None, limit=500):
     Return data as dataframe
     """
     period_ms = calculate_period_ms(period)
+    now_ms = int(time.time() * 1000)
+    earliest_allowed_start = now_ms - 30 * 24 * 60 * 60 * 1000 + period_ms
 
     if startTime is None:
-        now_ms = int(time.time() * 1000)
-        thirty_days_ms = 30 * 24 * 60 * 60 * 1000
-        startTime = now_ms - thirty_days_ms
+        startTime = earliest_allowed_start
+    
+    # Clamp startTime to the earliest allowed value
+    startTime = max(startTime, earliest_allowed_start)
 
     record = []
     print(f"----Fetching {symbol}_{period}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
+    page_limit = limit
+    
+    # Page by fixed time windows using endTime only:
+    # - Binance ignores startTime alone (returns newest rows), and rejects any time
+    #   older than ~30 days with HTTP 400 (-1130) -> startTime is clamped above.
+    # - Binance returns "latest N rows <= endTime", so a page can include rows from
+    #   before the window (harmless, deduped in upsert).
+    # - Next window starts at endTime + 1, never at data[-1], so the loop always
+    #   moves forward even on empty/short pages (no infinite loop).
+    # - The only stop condition is the window reaching now.
     while True:
         endTime = startTime + period_ms * limit
-        now_ms = int(time.time() * 1000)
-        page_limit = limit
         if endTime > now_ms:
               endTime = now_ms
-              page_limit = int((endTime - startTime)/period_ms)
+              # ceil, not int: a window like 218.99 periods can still hold 219 rows;
+              # int() would drop the oldest row -> permanent gap.
+              page_limit = math.ceil((endTime - startTime)/period_ms)
               if page_limit < 1:
                   break
 
         params = {'symbol': symbol, 'period': period, 'limit': page_limit, 'endTime': endTime}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
         data = response.json()
 
         error_check(data, response.status_code)
-        if not data:
-            break
+        if data:
+            record.extend(data)
+            print(
+                f"Fetched {len(record)} records so far... (up to {pd.to_datetime(data[-1]['timestamp'], unit='ms').date()})")
 
-        record.extend(data)
-        print(
-            f"Fetched {len(record)} records so far... (up to {pd.to_datetime(data[-1]['timestamp'], unit='ms').date()})")
-
-        if len(data) < limit:
-            break
-
-        startTime = data[-1]["timestamp"] + 1
+        startTime = endTime + 1
         time.sleep(0.3)
 
     if record:
@@ -130,7 +146,7 @@ def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
     record = []
     while True:
         params = {"symbol": symbol, "startTime": startTime, "limit": limit}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
         data = response.json()
 
         error_check(data, response.status_code)
@@ -154,6 +170,7 @@ def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
     else:
         return pd.DataFrame()
 
+# REVIEW #5: fetch_klines and fetch_indexprice are ~90% identical -> merge after fixing #3.
 def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
     """
     fetch kline data from binance API [/fapi/v1/klines]
@@ -166,7 +183,7 @@ def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
     record = []
     while True:
         params = {'symbol': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
         data = response.json()
 
         error_check(data, response.status_code)
@@ -190,7 +207,7 @@ def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
         df = pd.DataFrame(record, columns=klines_columns)
         df = df.drop(columns=['ignore'])
         now_ms = int(time.time() * 1000)
-        df = df[df['close_time'] <= now_ms]
+        df = df[df['close_time'] <= now_ms]  # REVIEW #5: add .copy() -> avoids SettingWithCopyWarning in clean_df
         df = clean_df(df, time_field='open_time')
     else:
         return pd.DataFrame()
@@ -209,7 +226,7 @@ def fetch_indexprice(url, symbol, period=None, startTime=None, limit=1500):
     record = []
     while True:
         params = {'pair': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
         data = response.json()
 
         error_check(data, response.status_code)
@@ -229,7 +246,7 @@ def fetch_indexprice(url, symbol, period=None, startTime=None, limit=1500):
         df = pd.DataFrame(record).iloc[:, [0, 1, 2, 3, 4, 6]]
         df.columns = ['open_time', 'open', 'high', 'low', 'close', 'close_time']
         now_ms = int(time.time() * 1000)
-        df = df[df['close_time'] <= now_ms]
+        df = df[df['close_time'] <= now_ms]  # REVIEW #5: add .copy()
         df = clean_df(df, time_field='open_time')
         return df
     else:
@@ -268,10 +285,10 @@ def write_watermark(bucket, key, endpoint, symbol, period, last_startTime):
     return new_watermark
 
 ENDPOINTS = [
-    ("open_interest",        "https://fapi.binance.com/futures/data/openInterestHist",             fetch_derivative,  "timestamp",   PERIOD),
-    ("global_long_short",    "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",  fetch_derivative,  "timestamp",   PERIOD),
-    ("top_trader_accounts",  "https://fapi.binance.com/futures/data/topLongShortAccountRatio",     fetch_derivative,  "timestamp",   PERIOD),
-    ("top_trader_positions", "https://fapi.binance.com/futures/data/topLongShortPositionRatio",    fetch_derivative,  "timestamp",   PERIOD),
+    ("openInterestHist",       "https://fapi.binance.com/futures/data/openInterestHist",             fetch_derivative,  "timestamp",   PERIOD),
+    ("globalLongShortAccountRatio",    "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",  fetch_derivative,  "timestamp",   PERIOD),
+    ("topLongShortAccountRatio",  "https://fapi.binance.com/futures/data/topLongShortAccountRatio",     fetch_derivative,  "timestamp",   PERIOD),
+    ("topLongShortPositionRatio", "https://fapi.binance.com/futures/data/topLongShortPositionRatio",    fetch_derivative,  "timestamp",   PERIOD),
     ("fundingRate",          "https://fapi.binance.com/fapi/v1/fundingRate",                       fetch_fundingrate, "fundingTime", None),
     ("klines",               "https://fapi.binance.com/fapi/v1/klines",                            fetch_klines,      "open_time",   PERIOD),
     ("indexPriceKlines",     "https://fapi.binance.com/fapi/v1/indexPriceKlines",                  fetch_indexprice,  "open_time",   PERIOD),
