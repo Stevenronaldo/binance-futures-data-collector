@@ -5,7 +5,9 @@ import time
 import math
 import boto3
 import pandas as pd
+from urllib3 import Retry
 from utils import calculate_period_ms, upsert_to_s3
+from endpoints import ENDPOINTS
 
 # Read from Lambda environment variables
 S3_BUCKET = os.environ["S3_BUCKET"]
@@ -18,26 +20,45 @@ SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
 s3 = boto3.client("s3")
 sns = boto3.client("sns")
 
-def clean_df(df, time_field):
-    """Helper: deduplicate and convert to numeric. Shared by all fetch functions."""
+retry = Retry(total=3, 
+            backoff_factor=1, 
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+            raise_on_status=False
+            )
+
+http = requests.Session()  # reuse TCP connections across endpoints
+http.mount("https://", requests.adapters.HTTPAdapter(max_retries=retry))
+
+def clean_df(df, time_field, schema):
+    """Helper: deduplicate and convert dtype according to schema"""
     df = df.drop_duplicates(subset=time_field, keep='last')
-    # REVIEW #2: types are GUESSED per batch. If one value can't convert (e.g. markPrice ""),
-    # the whole column silently stays string -> Parquet schema drifts -> Athena HIVE_BAD_DATA.
-    # Hint: declare an explicit schema per endpoint {col: dtype} and cast to it; fail loudly.
-    for col in df.columns:
-        try:
-            df[col] = pd.to_numeric(df[col], errors='raise')
-        except (ValueError, TypeError):
-            pass  #leave non-numeric columns (like 'symbol') untouched  # REVIEW #2: silent failure
+
+    missing = set(schema) - set(df.columns)
+    if missing:
+        raise ValueError(f"missing columns: {missing}")
+    
+    for col, (dtype, nullable) in schema.items():
+        if nullable:
+            df[col] = df[col].replace("", None)
+
+        if dtype == "string":
+            df[col] = df[col].astype("string")
+        else:
+            df[col] = pd.to_numeric(df[col], errors='raise').astype(dtype)
+
+        if not nullable and df[col].isnull().any():
+            raise ValueError(f"column {col} has null values but is not nullable")
+    df = df[list(schema)]
     return df
 
-# REVIEW #3: callers run response.json() BEFORE this check -> an HTML error page (502)
-# raises a confusing JSONDecodeError. data.get() also crashes if data is a list.
-# No retry: one 429/5xx fails the endpoint for the whole day.
-# Hint: one helper get_json(session, url, params) that checks status first + retries with backoff.
-def error_check(data, status_code):
-    if status_code != 200:
-        raise Exception(f"HTTP {status_code} - {data.get('msg', 'no message')}")
+def get_json(session, url, params=None):
+    response = session.get(url, params=params, timeout=10)
+
+    if response.status_code != 200:
+        raise Exception(f"HTTP {response.status_code} - {response.text[:200]}")
+    
+    return response.json()
 
 def quality_check(endpoint, symbol, df, time_field, period_ms, prev_watermark):
     issues = []
@@ -74,10 +95,9 @@ def quality_check(endpoint, symbol, df, time_field, period_ms, prev_watermark):
     now_ms = int(time.time() * 1000)
     if now_ms - ts.iloc[-1] > max_age:
         issues.append(f"[{symbol}-{endpoint}] Quality: stale, latest {pd.to_datetime(ts.iloc[-1], unit ='ms')}")
-
     return issues
 
-def fetch_derivative(url, symbol, period, startTime=None, limit=500):
+def fetch_derivative(session, url, symbol, period, startTime=None, limit=500):
     """
     fetch derivative data from binance API [/futures/data/]
     Return data as dataframe
@@ -115,10 +135,8 @@ def fetch_derivative(url, symbol, period, startTime=None, limit=500):
                   break
 
         params = {'symbol': symbol, 'period': period, 'limit': page_limit, 'endTime': endTime}
-        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
-        data = response.json()
+        data = get_json(session, url, params=params)
 
-        error_check(data, response.status_code)
         if data:
             record.extend(data)
             print(
@@ -129,12 +147,11 @@ def fetch_derivative(url, symbol, period, startTime=None, limit=500):
 
     if record:
         df = pd.DataFrame(record)
-        df = clean_df(df, time_field='timestamp')
         return df
     else:
         return pd.DataFrame()
 
-def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
+def fetch_fundingrate(session, url, symbol, period=None, startTime=None, limit=1000):
     """
     fetch fundingrate data from binance API [/fapi/v1/fundingRate]
     Return data as dataframe
@@ -146,10 +163,8 @@ def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
     record = []
     while True:
         params = {"symbol": symbol, "startTime": startTime, "limit": limit}
-        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
-        data = response.json()
+        data = get_json(session, url, params=params)
 
-        error_check(data, response.status_code)
         if not data:
             break
 
@@ -165,13 +180,12 @@ def fetch_fundingrate(url, symbol, period=None, startTime=None, limit=1000):
 
     if record:
         df = pd.DataFrame(record)
-        df = clean_df(df, time_field='fundingTime')
         return df
     else:
         return pd.DataFrame()
 
 # REVIEW #5: fetch_klines and fetch_indexprice are ~90% identical -> merge after fixing #3.
-def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
+def fetch_klines(session, url, symbol, period=None, startTime=None, limit=1500):
     """
     fetch kline data from binance API [/fapi/v1/klines]
     Return data as dataframe
@@ -183,10 +197,8 @@ def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
     record = []
     while True:
         params = {'symbol': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
-        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
-        data = response.json()
+        data = get_json(session, url, params=params)
 
-        error_check(data, response.status_code)
         if not data:
             break
 
@@ -208,13 +220,12 @@ def fetch_klines(url, symbol, period=None, startTime=None, limit=1500):
         df = df.drop(columns=['ignore'])
         now_ms = int(time.time() * 1000)
         df = df[df['close_time'] <= now_ms]  # REVIEW #5: add .copy() -> avoids SettingWithCopyWarning in clean_df
-        df = clean_df(df, time_field='open_time')
     else:
         return pd.DataFrame()
 
     return df
 
-def fetch_indexprice(url, symbol, period=None, startTime=None, limit=1500):
+def fetch_indexprice(session, url, symbol, period=None, startTime=None, limit=1500):
     """
     fetch index price klines data from binance API [/fapi/v1/indexPriceKlines]
     Return data as dataframe
@@ -226,10 +237,8 @@ def fetch_indexprice(url, symbol, period=None, startTime=None, limit=1500):
     record = []
     while True:
         params = {'pair': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
-        response = requests.get(url, params=params, timeout=10)  # REVIEW #3
-        data = response.json()
+        data = get_json(session, url, params=params)
 
-        error_check(data, response.status_code)
         if not data:
             break
 
@@ -247,7 +256,6 @@ def fetch_indexprice(url, symbol, period=None, startTime=None, limit=1500):
         df.columns = ['open_time', 'open', 'high', 'low', 'close', 'close_time']
         now_ms = int(time.time() * 1000)
         df = df[df['close_time'] <= now_ms]  # REVIEW #5: add .copy()
-        df = clean_df(df, time_field='open_time')
         return df
     else:
         return pd.DataFrame()
@@ -284,17 +292,15 @@ def write_watermark(bucket, key, endpoint, symbol, period, last_startTime):
     )
     return new_watermark
 
-ENDPOINTS = [
-    ("openInterestHist",       "https://fapi.binance.com/futures/data/openInterestHist",             fetch_derivative,  "timestamp",   PERIOD),
-    ("globalLongShortAccountRatio",    "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",  fetch_derivative,  "timestamp",   PERIOD),
-    ("topLongShortAccountRatio",  "https://fapi.binance.com/futures/data/topLongShortAccountRatio",     fetch_derivative,  "timestamp",   PERIOD),
-    ("topLongShortPositionRatio", "https://fapi.binance.com/futures/data/topLongShortPositionRatio",    fetch_derivative,  "timestamp",   PERIOD),
-    ("fundingRate",          "https://fapi.binance.com/fapi/v1/fundingRate",                       fetch_fundingrate, "fundingTime", None),
-    ("klines",               "https://fapi.binance.com/fapi/v1/klines",                            fetch_klines,      "open_time",   PERIOD),
-    ("indexPriceKlines",     "https://fapi.binance.com/fapi/v1/indexPriceKlines",                  fetch_indexprice,  "open_time",   PERIOD),
-]
+# Maps the "fetcher" key of each entry in endpoints.ENDPOINTS to its function
+FETCHERS = {
+    "derivative":  fetch_derivative,
+    "fundingrate": fetch_fundingrate,
+    "klines":      fetch_klines,
+    "indexprice":  fetch_indexprice,
+}
 
-def fetch_process(url, symbol, fetch_func, time_field, period):
+def fetch_process(session, url, symbol, fetch_func, time_field, period, schema):
     endpoint = url.split('/')[-1]
     watermark_key = f'{S3_PREFIX}/_watermark/{symbol}-{endpoint}-period={period}.json'
     error_issues = []
@@ -310,12 +316,19 @@ def fetch_process(url, symbol, fetch_func, time_field, period):
             startTime = current_watermark['last_startTime'] + 1
             print(f'---fetching {symbol}-{endpoint}-period={period} from {pd.to_datetime(startTime, unit="ms")}---')
 
-        df = fetch_func(url, symbol, period=period, startTime=startTime)
+        df = fetch_func(session, url, symbol, period=period, startTime=startTime)
+
+        extra_cols = [c for c in df.columns if c not in schema]
+        if extra_cols:
+            quality_issues.append(f"[{symbol}-{endpoint}] Quality: extra columns {extra_cols}")
+
+        if not df.empty:
+            df = clean_df(df, time_field= time_field, schema=schema)
 
         period_ms = calculate_period_ms(period)
         prev_ts = current_watermark["last_startTime"] if current_watermark else None
         try:
-            quality_issues = quality_check(endpoint, symbol, df, time_field, period_ms, prev_ts)
+            quality_issues  += quality_check(endpoint, symbol, df, time_field, period_ms, prev_ts)
         except Exception as e:
             error_issues.append(f"[{symbol}-{endpoint}] Error: quality check failed: {e}")
 
@@ -357,13 +370,16 @@ def lambda_handler(event, context):
 
     for symbol in SYMBOLS:
         summary[symbol] = {}
-        for name, url, fetch_func, time_field, period in ENDPOINTS:
+        for ep in ENDPOINTS:
+            name, url, time_field, schema = ep["name"], ep["url"], ep["time_field"], ep["schema"]
+            fetch_func = FETCHERS[ep["fetcher"]]
+            period = PERIOD if ep["use_period"] else None
             if context.get_remaining_time_in_millis() < 30_000:
                 print("Time budget exhausted — stopping cleanly")
                 stopped_early = True
                 all_error_issues.append(f"[{symbol}-{name}] Error: stopped early, remaining {context.get_remaining_time_in_millis()} ms")
                 break
-            summary[symbol][name], quality_issues, error_issues = fetch_process(url, symbol, fetch_func, time_field, period)
+            summary[symbol][name], quality_issues, error_issues = fetch_process(http, url, symbol, fetch_func, time_field, period, schema)
             all_quality_issues.extend(quality_issues)
             all_error_issues.extend(error_issues)
         if stopped_early:

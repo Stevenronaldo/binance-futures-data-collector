@@ -11,6 +11,11 @@ data "archive_file" "lambda" {
     content  = file("${path.module}/../src/utils.py")
     filename = "utils.py"
   }
+
+  source {
+    content  = file("${path.module}/../src/endpoints.py")
+    filename = "endpoints.py"
+  }
 }
 
 data "aws_caller_identity" "current" {}
