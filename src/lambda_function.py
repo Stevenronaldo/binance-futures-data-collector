@@ -184,19 +184,35 @@ def fetch_fundingrate(session, url, symbol, period=None, startTime=None, limit=1
     else:
         return pd.DataFrame()
 
-# REVIEW #5: fetch_klines and fetch_indexprice are ~90% identical -> merge after fixing #3.
-def fetch_klines(session, url, symbol, period=None, startTime=None, limit=1500):
+def fetch_kline_like(session, url, symbol, period=None, startTime=None, limit=1500):
     """
-    fetch kline data from binance API [/fapi/v1/klines]
+    fetch kline like data from binance API [/fapi/v1/klines] & [/fapi/v1/indexPriceKlines]
     Return data as dataframe
     """
+    KLINES_LIST = ['open_time', 'open', 'high', 'low', 'close', 'volume',
+                      'close_time', 'quote_volume', 'num_trades',
+                      'taker_buy_base', 'taker_buy_quote', 'ignore']
+
+    INDEX_PRICE_KLINES_LIST = ['open_time', 'open', 'high', 'low', 'close', 
+                               'ignore', 'close_time', 'ignore', 'ignore',
+                                'ignore', 'ignore', 'ignore']
+    
     if startTime is None:
         startTime = 1567641600000  #2019-09-05 (Binance futures launch)
 
+    endpoint = url.split('/')[-1]
+    if endpoint == "klines":
+        columns_name, symbol_param = KLINES_LIST, "symbol"
+    elif endpoint == "indexPriceKlines":
+        columns_name, symbol_param = INDEX_PRICE_KLINES_LIST, "pair"
+    else:
+        raise ValueError(f"Unknown endpoint: {endpoint}")
+    
     print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
+    
     record = []
     while True:
-        params = {'symbol': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
+        params = {symbol_param : symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
         data = get_json(session, url, params=params)
 
         if not data:
@@ -211,54 +227,15 @@ def fetch_klines(session, url, symbol, period=None, startTime=None, limit=1500):
         startTime = data[-1][0] + 1
         time.sleep(0.3)
 
-    klines_columns = ['open_time', 'open', 'high', 'low', 'close', 'volume',
-                      'close_time', 'quote_volume', 'num_trades',
-                      'taker_buy_base', 'taker_buy_quote', 'ignore']
-
     if record:
-        df = pd.DataFrame(record, columns=klines_columns)
+        df = pd.DataFrame(record, columns=columns_name)
         df = df.drop(columns=['ignore'])
         now_ms = int(time.time() * 1000)
-        df = df[df['close_time'] <= now_ms]  # REVIEW #5: add .copy() -> avoids SettingWithCopyWarning in clean_df
+        df = df[df['close_time'] <= now_ms].copy()
     else:
         return pd.DataFrame()
 
     return df
-
-def fetch_indexprice(session, url, symbol, period=None, startTime=None, limit=1500):
-    """
-    fetch index price klines data from binance API [/fapi/v1/indexPriceKlines]
-    Return data as dataframe
-    """
-    if startTime is None:
-        startTime = 1567641600000  #2019-09-05 (Binance futures launch)
-
-    print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
-    record = []
-    while True:
-        params = {'pair': symbol, 'interval': period, 'startTime': startTime, 'limit': limit}
-        data = get_json(session, url, params=params)
-
-        if not data:
-            break
-
-        record.extend(data)
-        print(f"  Fetched {len(record)} records so far... (up to {pd.to_datetime(data[-1][0], unit='ms').date()})")
-
-        if len(data) < limit:
-            break
-
-        startTime = data[-1][0] + 1
-        time.sleep(0.3)
-
-    if record:
-        df = pd.DataFrame(record).iloc[:, [0, 1, 2, 3, 4, 6]]
-        df.columns = ['open_time', 'open', 'high', 'low', 'close', 'close_time']
-        now_ms = int(time.time() * 1000)
-        df = df[df['close_time'] <= now_ms]  # REVIEW #5: add .copy()
-        return df
-    else:
-        return pd.DataFrame()
 
 def read_watermark(bucket, key):
     """
@@ -296,8 +273,8 @@ def write_watermark(bucket, key, endpoint, symbol, period, last_startTime):
 FETCHERS = {
     "derivative":  fetch_derivative,
     "fundingrate": fetch_fundingrate,
-    "klines":      fetch_klines,
-    "indexprice":  fetch_indexprice,
+    "fetch_kline_like": fetch_kline_like,
+    "fetch_kline_like": fetch_kline_like,
 }
 
 def fetch_process(session, url, symbol, fetch_func, time_field, period, schema):

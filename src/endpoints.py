@@ -104,7 +104,7 @@ ENDPOINTS = [
     {
         "name": "klines",
         "url": "https://fapi.binance.com/fapi/v1/klines",
-        "fetcher": "klines",
+        "fetcher": "fetch_kline_like",
         "time_field": "open_time",
         "use_period": True,
         "schema": KLINES_SCHEMA,
@@ -112,7 +112,7 @@ ENDPOINTS = [
     {
         "name": "indexPriceKlines",
         "url": "https://fapi.binance.com/fapi/v1/indexPriceKlines",
-        "fetcher": "indexprice",
+        "fetcher": "fetch_kline_like",
         "time_field": "open_time",
         "use_period": True,
         "schema": INDEX_PRICE_KLINES_SCHEMA,
