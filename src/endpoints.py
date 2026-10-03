@@ -1,4 +1,4 @@
-# Binance endpoints collected by the Lambda, and the columns each one stores.
+# Binance endpoints collected by the Lambda, and the columns each one stores. 
 # Pure data (no imports) so both lambda_function.py and scripts/ can use it.
 #
 # schema: {column: (pandas dtype, nullable)}
