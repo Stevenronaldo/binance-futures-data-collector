@@ -24,7 +24,7 @@ resource "aws_lambda_function" "collector" {
   layers                         = var.lambda_layers
   memory_size                    = 512
   package_type                   = "Zip"
-  reserved_concurrent_executions = -1
+  reserved_concurrent_executions = 1
   role                           = aws_iam_role.lambda_exec.arn
   runtime                        = "python3.14"
   source_code_hash               = data.archive_file.lambda.output_base64sha256
