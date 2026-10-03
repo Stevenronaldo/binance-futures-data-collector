@@ -20,8 +20,6 @@ def upsert_to_s3(s3, bucket, key, new_df, time_field):
     Merge new_df into the Parquet file at key 
     (newest wins on duplicate time_field) and write it back.
     """
-    # REVIEW #4: read -> modify -> write is not atomic. Two concurrent Lambda runs both read the
-    # same file and the last writer wipes the other's rows (lost update). Fix is in terraform/lambda.tf.
     try:
         obj = s3.get_object(Bucket=bucket, Key=key)
         existing = pd.read_parquet(io.BytesIO(obj["Body"].read()))
