@@ -273,8 +273,7 @@ def write_watermark(bucket, key, endpoint, symbol, period, last_startTime):
 FETCHERS = {
     "derivative":  fetch_derivative,
     "fundingrate": fetch_fundingrate,
-    "fetch_kline_like": fetch_kline_like,
-    "fetch_kline_like": fetch_kline_like,
+    "fetch_kline_like": fetch_kline_like
 }
 
 def fetch_process(session, url, symbol, fetch_func, time_field, period, schema):
