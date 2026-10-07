@@ -1,6 +1,5 @@
 import io
 import time
-import requests
 import boto3
 import hashlib
 import zipfile
@@ -12,7 +11,8 @@ from datetime import timedelta, date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from utils import upsert_to_s3, calculate_period_ms
+from utils import upsert_to_s3, calculate_period_ms, make_session
+from endpoints import ENDPOINTS as API_ENDPOINTS 
 
 aws_lambda = boto3.client("lambda", region_name="ap-southeast-1")
 s3 = boto3.client("s3", region_name="ap-southeast-1")
@@ -161,7 +161,7 @@ def read_parquet_from_s3(bucket, key):
     data = obj["Body"].read()
     return pd.read_parquet(io.BytesIO(data))
 
-ENDPOINTS = {
+ARCHIVE_COLUMNS = {
     "openInterestHist": {
         "sum_open_interest": "sumOpenInterest",
         "sum_open_interest_value": "sumOpenInterestValue",
@@ -177,6 +177,8 @@ ENDPOINTS = {
     },
 }
 
+SCHEMAS = {ep["name"]: ep["schema"] for ep in API_ENDPOINTS}
+
 if __name__ == "__main__":
     symbols, s3_bucket, s3_prefix, period = get_variables(lambda_function)
     try:
@@ -184,7 +186,7 @@ if __name__ == "__main__":
     except Exception as e:
         raise ValueError(f"Error calculating interval_ms for period '{period}': {e}")
 
-    with requests.Session() as session:
+    with make_session() as session:
         failed = []  
         for symbol in symbols:
             try:
@@ -194,7 +196,7 @@ if __name__ == "__main__":
                     continue
 
                 oldest_ts = {}
-                for endpoint in ENDPOINTS:
+                for endpoint in ARCHIVE_COLUMNS:
                     key = get_oldest_S3_file(endpoint, symbol, s3_bucket, s3_prefix)
                     if key is None:
                         continue
@@ -240,7 +242,7 @@ if __name__ == "__main__":
 
                 archive_df = day_df[day_df["timestamp"] % interval_ms == 0]
 
-                for endpoint, mapping in ENDPOINTS.items():
+                for endpoint, mapping in ARCHIVE_COLUMNS.items():
                     endpoint_df = archive_df[["symbol", "timestamp", *mapping]].rename(columns=mapping)
                     key = get_oldest_S3_file(endpoint, symbol, s3_bucket, s3_prefix)
                     if key is None:
@@ -249,6 +251,12 @@ if __name__ == "__main__":
 
                     existing = read_parquet_from_s3(s3_bucket, key)
                     endpoint_df = endpoint_df[endpoint_df["timestamp"] < oldest_ts[endpoint]]
+
+                    endpoint_schema = SCHEMAS[endpoint]
+                    endpoint_df = endpoint_df.reindex(columns=endpoint_schema.keys())
+
+                    for col, (dtype, _) in endpoint_schema.items():
+                        endpoint_df[col] = endpoint_df[col].astype(dtype)
 
                     if endpoint_df.empty:
                         print(f"{symbol}:{endpoint}: nothing before cutoff, skipping")

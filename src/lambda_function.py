@@ -1,12 +1,10 @@
-import requests
 import os
 import json
 import time
 import math
 import boto3
 import pandas as pd
-from urllib3 import Retry
-from utils import calculate_period_ms, upsert_to_s3
+from utils import calculate_period_ms, upsert_to_s3, make_session
 from endpoints import ENDPOINTS
 
 # Read from Lambda environment variables
@@ -20,15 +18,7 @@ SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
 s3 = boto3.client("s3")
 sns = boto3.client("sns")
 
-retry = Retry(total=3, 
-            backoff_factor=1, 
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-            raise_on_status=False
-            )
-
-http = requests.Session()  # reuse TCP connections across endpoints
-http.mount("https://", requests.adapters.HTTPAdapter(max_retries=retry))
+session = make_session()
 
 def clean_df(df, time_field, schema):
     """Helper: deduplicate and convert dtype according to schema"""
@@ -355,7 +345,7 @@ def lambda_handler(event, context):
                 stopped_early = True
                 all_error_issues.append(f"[{symbol}-{name}] Error: stopped early, remaining {context.get_remaining_time_in_millis()} ms")
                 break
-            summary[symbol][name], quality_issues, error_issues = fetch_process(http, url, symbol, fetch_func, time_field, period, schema)
+            summary[symbol][name], quality_issues, error_issues = fetch_process(session, url, symbol, fetch_func, time_field, period, schema)
             all_quality_issues.extend(quality_issues)
             all_error_issues.extend(error_issues)
         if stopped_early:

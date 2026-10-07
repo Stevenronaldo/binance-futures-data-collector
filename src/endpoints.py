@@ -43,8 +43,8 @@ FUNDING_RATE_SCHEMA = {
 
 OPEN_INTEREST_SCHEMA = {
     "symbol":               ("string",  False),
-    "sumOpenInterest":      ("float64", False),
-    "sumOpenInterestValue": ("float64", False),
+    "sumOpenInterest":      ("float64", False), #can be null from backfill_derivative
+    "sumOpenInterestValue": ("float64", False), #can be null from backfill_derivative
     "CMCCirculatingSupply": ("float64", True),
     "timestamp":            ("int64",   False),
 }
@@ -53,7 +53,7 @@ OPEN_INTEREST_SCHEMA = {
 LONG_SHORT_RATIO_SCHEMA = {
     "symbol":         ("string",  False),
     "longAccount":    ("float64", False),
-    "longShortRatio": ("float64", False),
+    "longShortRatio": ("float64", False), #can be null from backfill_derivative
     "shortAccount":   ("float64", False),
     "timestamp":      ("int64",   False),
 }

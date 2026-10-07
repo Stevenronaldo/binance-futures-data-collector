@@ -1,5 +1,18 @@
 import pandas as pd
 import io
+from urllib3 import Retry
+import requests
+
+def make_session(total=3, backoff_factor=1):
+    retry = Retry(total= total, 
+            backoff_factor= backoff_factor, 
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+            raise_on_status=False
+            )
+    session = requests.Session()
+    session.mount("https://", requests.adapters.HTTPAdapter(max_retries=retry))
+    return session
 
 def calculate_period_ms(period):
     if period is None:
