@@ -42,6 +42,17 @@ variable "period" {
   }
 }
 
+variable "lookback_window" {
+  description = "Lookback before the watermark, to pick up rows Binance publishes late"
+  type        = string
+  default     = "2d"
+
+  validation {
+    condition     = contains(["12h", "1d", "2d", "3d", "7d"], var.lookback_window)
+    error_message = "lookback_window must be one of 12h, 1d, 2d, 3d, 7d."
+  }
+}
+
 variable "lambda_layers" {
   description = "Layer ARNs providing requests and pandas/pyarrow"
   type        = list(string)

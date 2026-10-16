@@ -13,6 +13,7 @@ S3_PREFIX = os.environ.get("S3_PREFIX", "binance-futures")
 SYMBOLS = [s.strip() for s in os.environ["SYMBOLS"].split(",") if s.strip()]
 PERIOD = os.environ.get("PERIOD", "1h")
 SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
+LOOKBACK_WINDOW = calculate_period_ms(os.environ.get("LOOKBACK_WINDOW", "2d")) #2 days as spare time if data is not available on 1st day
 
 # boto3 client created once at module level — reused across warm invocations
 s3 = boto3.client("s3")
@@ -100,7 +101,7 @@ def fetch_derivative(session, url, symbol, period, startTime=None, limit=500):
         startTime = earliest_allowed_start
     
     # Clamp startTime to the earliest allowed value
-    startTime = max(startTime, earliest_allowed_start)
+    startTime = max(startTime - LOOKBACK_WINDOW, earliest_allowed_start)
 
     record = []
     print(f"----Fetching {symbol}_{period}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
@@ -148,6 +149,8 @@ def fetch_fundingrate(session, url, symbol, period=None, startTime=None, limit=1
     """
     if startTime is None:
         startTime = 1567641600000  #2019-09-05 (Binance futures launch)
+    else:
+        startTime = startTime - LOOKBACK_WINDOW
 
     print(f"----Fetching {symbol}_URL:{url} [startTime: {pd.to_datetime(startTime, unit='ms')}]----")
     record = []
@@ -189,6 +192,8 @@ def fetch_kline_like(session, url, symbol, period=None, startTime=None, limit=15
     
     if startTime is None:
         startTime = 1567641600000  #2019-09-05 (Binance futures launch)
+    else:
+        startTime = startTime - LOOKBACK_WINDOW
 
     endpoint = url.split('/')[-1]
     if endpoint == "klines":
@@ -277,9 +282,10 @@ def fetch_process(session, url, symbol, fetch_func, time_field, period, schema):
 
         if current_watermark is None:
             print(f'---first run {symbol}-{endpoint}-period={period}---')
-            startTime = None
+            startTime, prev_ts = None, None
         else:
-            startTime = current_watermark['last_startTime'] + 1
+            prev_ts = current_watermark["last_startTime"]
+            startTime = prev_ts
             print(f'---fetching {symbol}-{endpoint}-period={period} from {pd.to_datetime(startTime, unit="ms")}---')
 
         df = fetch_func(session, url, symbol, period=period, startTime=startTime)
@@ -292,7 +298,6 @@ def fetch_process(session, url, symbol, fetch_func, time_field, period, schema):
             df = clean_df(df, time_field= time_field, schema=schema)
 
         period_ms = calculate_period_ms(period)
-        prev_ts = current_watermark["last_startTime"] if current_watermark else None
         try:
             quality_issues  += quality_check(endpoint, symbol, df, time_field, period_ms, prev_ts)
         except Exception as e:
@@ -300,8 +305,13 @@ def fetch_process(session, url, symbol, fetch_func, time_field, period, schema):
 
         if df.empty:
             print(f"[{symbol}-{endpoint}] no new data")
-            return {"status": "no_new_data"}, quality_issues, error_issues
+            return {"status": "no_new_data"}, quality_issues, error_issues 
 
+        if prev_ts is None:
+            new_rows = len(df)
+        else:
+            new_rows = int((df[time_field] > prev_ts).sum())
+                
         df["_year"] = pd.to_datetime(df[time_field], unit="ms").dt.year
         total = 0
         for year, group in df.groupby("_year"):
@@ -312,10 +322,10 @@ def fetch_process(session, url, symbol, fetch_func, time_field, period, schema):
 
         last_startTime = int(df[time_field].max())
         write_watermark(S3_BUCKET, watermark_key, endpoint, symbol, period, last_startTime)
-
+        
         return ({
-            "status": "ok",
-            "new_rows": len(df),
+            "status": "ok" if new_rows > 0 else "no_new_data",
+            "new_rows": new_rows,
             "total_rows": total,
             "last_startTime": last_startTime,
         }

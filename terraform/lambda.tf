@@ -33,11 +33,12 @@ resource "aws_lambda_function" "collector" {
   timeout                        = 600
   environment {
     variables = {
-      PERIOD        = var.period
-      S3_BUCKET     = var.s3_bucket
-      S3_PREFIX     = var.s3_prefix
-      SNS_TOPIC_ARN = aws_sns_topic.lambda_error_notification.arn
-      SYMBOLS       = join(",", var.symbols)
+      PERIOD          = var.period
+      LOOKBACK_WINDOW = var.lookback_window
+      S3_BUCKET       = var.s3_bucket
+      S3_PREFIX       = var.s3_prefix
+      SNS_TOPIC_ARN   = aws_sns_topic.lambda_error_notification.arn
+      SYMBOLS         = join(",", var.symbols)
     }
   }
   ephemeral_storage {
