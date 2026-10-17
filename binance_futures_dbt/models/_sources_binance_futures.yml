@@ -1,0 +1,15 @@
+sources:
+  - name: binance_futures
+    description: binance futures endpoints table 
+    database: awsdatacatalog
+    schema: binance_futures
+    tables:
+      - name: funding_rate
+      - name: global_ls_account_ratio
+      - name: index_price_klines
+      - name: klines
+      - name: open_interest
+      - name: top_ls_account_ratio
+      - name: top_ls_position_ratio
+
+        

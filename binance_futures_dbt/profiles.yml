@@ -1,0 +1,13 @@
+binance_futures_dbt:
+  outputs:
+    dev:
+      type: athena
+      region_name: "{{ env_var('DBT_REGION')}}"
+      database: awsdatacatalog
+      schema: binance_futures_dbt
+      s3_staging_dir: "s3://{{ env_var('DBT_S3_BUCKET')}}/athena_result/"
+      s3_data_dir: "s3://{{ env_var('DBT_S3_BUCKET')}}/dbt/"
+      work_group: primary
+      aws_profile_name: default
+      threads: 4
+  target: dev
