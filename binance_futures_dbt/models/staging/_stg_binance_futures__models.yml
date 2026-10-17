@@ -1,0 +1,43 @@
+models:
+  - name: stg_binance_futures__klines
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, open_time]
+
+  - name: stg_binance_futures__index_price_klines
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, open_time]
+
+  - name: stg_binance_futures__funding_rate
+    data_tests:
+      # fundingtime is rounded to the hour here, so this also catches two settlements snapping to the same hour
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, fundingtime]
+
+  - name: stg_binance_futures__open_interest
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, '"timestamp"']
+
+  - name: stg_binance_futures__global_ls_account_ratio
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, '"timestamp"']
+
+  - name: stg_binance_futures__top_ls_account_ratio
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, '"timestamp"']
+
+  - name: stg_binance_futures__top_ls_position_ratio
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, '"timestamp"']

@@ -1,6 +1,6 @@
 # 📊 Binance Futures Data Pipeline
 
-An end-to-end data pipeline that collects **klines, funding rate, and derivatives** data from the Binance USDⓈ-M Futures API, stores it as Hive-partitioned Parquet in S3, and exposes it through an Athena serving layer — culminating in a single **feature matrix** designed for time-series analysis and ML model development.
+An end-to-end data pipeline that collects **klines, funding rate, and derivatives** data from the Binance USDⓈ-M Futures API, stores it as Hive-partitioned Parquet in S3, and exposes it through an Athena serving layer, with a **dbt** project building a single **features matrix** designed for time-series analysis and ML model development.
 
 All infrastructure is defined in **Terraform**, every dataset is validated against an explicit schema before it is written, and every run is checked for data gaps and staleness, with alerts delivered through SNS.
 
@@ -8,14 +8,15 @@ All infrastructure is defined in **Terraform**, every dataset is validated again
 
 ## Overview
 
-An AWS Lambda function runs once a day on an EventBridge schedule and collects **7 datasets per symbol** from the Binance Futures API. Raw data lands in S3 as Parquet, partitioned by endpoint, symbol, and year, and is queried through Glue/Athena external tables that feed a single hourly feature matrix view.
+An AWS Lambda function runs once a day on an EventBridge schedule and collects **7 datasets per symbol** from the Binance Futures API. Raw data lands in S3 as Parquet, partitioned by endpoint, symbol, and year, and is queried through Glue/Athena external tables. A dbt project turns those tables into a single hourly feature matrix.
 
-The pipeline has four layers:
+The pipeline has five layers:
 
 1. **Ingestion** — EventBridge-triggered Lambda pulls from the Binance API, with automatic retries for transient errors.
 2. **Storage** — Hive-partitioned Parquet in S3 (`endpoint=` / `symbol=` / `year=`), loaded incrementally via watermarks and enforced against a per-endpoint schema.
-3. **Serving** — Glue Data Catalog external tables (partition projection) and a One Big Table feature-matrix view in Athena.
-4. **Monitoring** — in-Lambda data quality checks, a failure destination, and a "didn't run" alarm, all routed to SNS.
+3. **Serving** — Glue Data Catalog external tables (partition projection) in Athena.
+4. **Transformation** — a dbt project (`binance_futures_dbt/`) with one staging view per table, a One Big Table feature-matrix view, and uniqueness tests.
+5. **Monitoring** — in-Lambda data quality checks, a failure destination, and a "didn't run" alarm, all routed to SNS.
 
 Incremental loading is driven by a **per-symbol, per-endpoint watermark** stored as a small JSON file in S3. On the first run, each endpoint backfills its full available history; on every subsequent run, fetching resumes from the last recorded `startTime`, and new rows are upserted — deduplicating by the endpoint's time field so no rows are ever duplicated.
 
@@ -56,7 +57,7 @@ flowchart TD
     D --> S3
 
     S3 --> G["Glue Data Catalog<br/>7 external tables<br/>partition projection"]
-    G --> V["Athena<br/>feature_matrix view"]
+    G --> DBT["dbt (Athena)<br/>7 staging views → features_matrix view"]
 
     L -- quality check summary --> SNS[SNS topic → email]
     L -. on failure .-> SNS
@@ -78,7 +79,7 @@ After all symbols are processed, the run publishes **one SNS summary** of all er
 
 **Long backfills:** if a run gets close to the Lambda timeout, it stops early after saving its watermarks. The next invocation resumes where it left off, so a large first-run backfill can be completed simply by invoking the function repeatedly.
 
-One file is written **per endpoint, per symbol, per year**. The datasets are joined into a single wide table only at the serving layer (see below), not at ingestion.
+One file is written **per endpoint, per symbol, per year**. The datasets are joined into a single wide table only in the dbt layer (see below), not at ingestion.
 
 ### Pagination
 
@@ -165,7 +166,7 @@ Every endpoint's columns, types, and nullability are declared in [`src/endpoints
 
 ## Serving Layer (Athena)
 
-The raw Parquet files are exposed as a queryable serving layer in the `binance_futures` Glue database, culminating in a single feature matrix for model training.
+The raw Parquet files are exposed as a queryable serving layer in the `binance_futures` Glue database. These tables are the sources for the dbt layer.
 
 ### External Tables
 
@@ -204,22 +205,57 @@ TBLPROPERTIES (
 );
 ```
 
-### Feature Matrix View (One Big Table)
+---
 
-`athena/feature_matrix_view.sql` defines a denormalized **One Big Table (OBT)** — a single hourly feature matrix per `(symbol, timestamp)` built by joining all endpoints, designed as the training dataset for downstream ML.
+## Transformation Layer (dbt)
 
-Transformations handled in the view:
+The feature matrix is built by the dbt project in [`binance_futures_dbt/`](binance_futures_dbt/), using the `dbt-athena` adapter. dbt only reads the Terraform-managed tables in `binance_futures`; everything it builds goes into its own Glue database, **`binance_futures_dbt`**, so the two never overlap.
 
-- **Timestamp alignment** — funding-rate timestamps drift a few milliseconds off the hour, in either direction. Timestamps are stored raw and snapped to the hour on read with `((fundingtime + 3600000 / 5) / 3600000) * 3600000`: adding 12 minutes before the integer-division floor means a timestamp slightly *before* the hour (e.g. `07:59:59.998`) lands on `08:00` rather than falling back to `07:00`, so joins match cleanly. The Lambda quality check applies the same rounding rule, so both agree on what "on the hour" means.
-- **Funding-rate forward-fill** — funding settles every 8 h while other metrics are hourly. A `LAST_VALUE(...) IGNORE NULLS OVER (PARTITION BY symbol ORDER BY ts)` window carries the last known funding rate forward across the intervening hours. The frame is backward-looking only (`UNBOUNDED PRECEDING` to `CURRENT ROW`), so there is no look-ahead leakage.
-- **Derived features** — `basis_rate` computed as `(close − index_close) / index_close`; taker long/short ratio derived inline from klines as `taker_buy_base / (volume − taker_buy_base)`.
+| Layer | Models | Materialization |
+| :---- | :---- | :---- |
+| Sources | the 7 external tables in `binance_futures` ([`models/_sources_binance_futures.yml`](binance_futures_dbt/models/_sources_binance_futures.yml)) | — (owned by Terraform) |
+| Staging | `stg_binance_futures__<table>`: one per source, light cleanup only | view |
+| Mart | `features_matrix`: the One Big Table | view |
+
+### Feature Matrix (One Big Table)
+
+`features_matrix` is a denormalized **One Big Table (OBT)**: a single hourly feature matrix per `(symbol, ts)` built by joining all endpoints, designed as the training dataset for downstream ML.
+
+Transformations:
+
+- **Timestamp alignment** (in `stg_binance_futures__funding_rate`) — funding-rate timestamps drift a few milliseconds off the hour, in either direction. Timestamps are stored raw and snapped to the hour on read with `((fundingtime + 3600000 / 5) / 3600000) * 3600000`: adding 12 minutes before the integer-division floor means a timestamp slightly *before* the hour (e.g. `07:59:59.998`) lands on `08:00` rather than falling back to `07:00`, so joins match cleanly. The staging model keeps the name `fundingtime` for the rounded value. The Lambda quality check applies the same rounding rule, so both agree on what "on the hour" means.
+- **Funding-rate forward-fill** — funding settles every 8 h while other metrics are hourly. A `LAST_VALUE(...) IGNORE NULLS OVER (PARTITION BY symbol ORDER BY ts)` window carries the last known funding rate forward across the intervening hours. The frame is backward-looking only (`UNBOUNDED PRECEDING` to `CURRENT ROW`), so there is no look-ahead leakage. Hours before a symbol's first settlement have a null funding rate.
+- **Derived features** — `basis_rate` computed as `(close − index_close) / index_close`; taker long/short ratio derived inline from klines as `taker_buy_base / (volume − taker_buy_base)`. Values are not rounded.
 - **Redundancy pruning** — base-vs-quote duplicate columns (`sumOpenInterestValue`, `quote_volume`) and near-static fields (`CMCCirculatingSupply`) are dropped in favour of a single representative per concept.
 
-The view INNER-joins the derivatives tables, so it covers the window where all features coexist: the archive backfill start (or ~30 days before a symbol was added, without the backfill) up to now. Archive-backfilled hours can have null long/short ratios, so handle nulls in those columns when building features.
+Every other table is **LEFT-joined** onto klines, so the matrix keeps the full kline history since 2019 (or the symbol's listing). Hours with no derivatives or index row have nulls in those columns instead of being dropped, so gaps stay visible. Archive-backfilled hours can also have null long/short ratios. Filter explicitly when building features, for example `WHERE sumopeninterest IS NOT NULL`.
 
-The view does not expose `year`, so queries on it read every year; at this data size that is fine.
+The view does not expose `year`, and the forward-fill window needs earlier rows, so queries on it read every year; at this data size that is fine. Materializing it as a table is the next step if that changes.
 
-The view is kept as a view rather than materialized — at this data size it queries quickly, and it always reflects the latest data. It is **not** managed by Terraform; create it by running `athena/feature_matrix_view.sql` in Athena after the database exists.
+### Tests
+
+[`models/staging/_stg_binance_futures__models.yml`](binance_futures_dbt/models/staging/_stg_binance_futures__models.yml) checks that every staging model is unique on the key the mart joins on (`symbol` + `open_time`, `"timestamp"`, or the rounded `fundingtime`), using `dbt_utils.unique_combination_of_columns`. A duplicate in any input would silently duplicate rows in the matrix, so these tests fail loudly instead of deduplicating in SQL.
+
+### Running dbt
+
+Requires `dbt-athena` (it pulls in `dbt-core`). It is not in `requirements.txt`, which lists the Lambda's dependencies only.
+
+1. Create `binance_futures_dbt/.env` (gitignored):
+   ```
+   DBT_S3_BUCKET=<your-bucket>
+   DBT_REGION=ap-southeast-1
+   ```
+   `profiles.yml` reads both with `env_var()`. dbt 1.13 loads `.env` from the project folder automatically; with older versions, export the variables first (`set -a; source .env; set +a`).
+2. Credentials come from the default AWS CLI profile.
+3. From `binance_futures_dbt/`:
+   ```bash
+   dbt deps     # installs dbt_utils
+   dbt debug    # checks the profile and the Athena connection
+   dbt run      # creates the views in binance_futures_dbt
+   dbt test     # uniqueness tests
+   ```
+
+Query results go to `s3://<bucket>/athena_result/`. Tables dbt materializes (none yet; all models are views) would go to `s3://<bucket>/dbt/`.
 
 ---
 
@@ -364,7 +400,8 @@ Because incremental fetching is watermark-driven, the pipeline self-heals after 
 1. Add the symbol to `symbols` in `terraform.tfvars` and run `terraform apply` (updates both the Lambda's `SYMBOLS` and the tables' partition projection).
 2. Invoke the Lambda — repeatedly if needed — until the backfill finishes; the stopped-early guard resumes each time.
 3. Optionally run `scripts/backfill_derivatives.py` to fill older derivatives history from the archive.
-4. Recreate or re-run the `feature_matrix` view if its SQL filters on specific symbols.
+
+The dbt models don't filter on symbols, so they pick up the new symbol without a change or a re-run.
 
 Note that without the archive backfill, a newly added symbol only gets derivatives history from ~30 days before it was added.
 
@@ -416,8 +453,12 @@ binance-futures-data-collector/
 ├── scripts/
 │   ├── backfill_derivatives.py  # one-off: older derivatives history from data.binance.vision
 │   └── migrate_partitions.py    # one-off: migration to the year= layout
-├── athena/
-│   └── feature_matrix_view.sql  # One Big Table: joined hourly feature matrix (not in Terraform)
+├── binance_futures_dbt/
+│   ├── dbt_project.yml · profiles.yml · packages.yml
+│   └── models/
+│       ├── _sources_binance_futures.yml  # the 7 Glue tables as dbt sources
+│       ├── staging/                      # stg_binance_futures__* views + uniqueness tests
+│       └── marts/features_matrix.sql     # One Big Table: joined hourly feature matrix
 ├── terraform/
 │   ├── version.tf · providers.tf · variables.tf · data.tf
 │   ├── lambda.tf · iam.tf · events.tf · logs.tf · sns.tf
@@ -433,7 +474,7 @@ binance-futures-data-collector/
 ## Notes
 
 - All timestamps are stored in **UTC** (Unix epoch milliseconds), unmodified; hour alignment happens on read.
-- Each endpoint lands in its **own files**. The datasets are joined into a wide feature matrix by the Athena `feature_matrix` view at query time, not when the data is collected.
+- Each endpoint lands in its **own files**. The datasets are joined into a wide feature matrix by the dbt `features_matrix` view at query time, not when the data is collected.
 - The upsert logic uses `keep="last"` deduplication, so re-running the function for an overlapping window is safe and idempotent.
 - Binance rate limits apply. Fetch loops `time.sleep(0.3)` between pages, and 429 responses are retried only after the `Retry-After` delay (ignoring 429s can trigger a temporary IP ban, HTTP 418).
 - `PERIOD` affects klines and derivatives only; funding rate settles on Binance's fixed schedule.

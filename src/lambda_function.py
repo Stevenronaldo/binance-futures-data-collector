@@ -55,7 +55,7 @@ def quality_check(endpoint, symbol, df, time_field, period_ms, prev_watermark):
     issues = []
 
     def round_ms(ts, unit_ms):
-        # keep in sync with feature_matrix view
+        # keep in sync with stg_binance_futures__funding_rate (dbt)
         return (ts + unit_ms // 5) // unit_ms * unit_ms
 
     if period_ms is None:            # fundingRate: interval can change
