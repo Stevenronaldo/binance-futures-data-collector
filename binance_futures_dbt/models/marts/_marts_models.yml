@@ -1,0 +1,119 @@
+models:
+  - name: features_matrix
+    description: >
+      One Big Table: one row per symbol per hour, joining all seven sources onto klines.
+      Every other source is LEFT-joined, so the full kline history is kept (2019, or the
+      symbol's listing date, onwards) and missing data shows up as NULL instead of a
+      missing row. Older hours have no derivatives data, and archive-backfilled hours can
+      have empty ratios, so filter explicitly when building features
+      (e.g. WHERE sumopeninterest IS NOT NULL). A NULL here can mean either "no row in the
+      source" or "the source row had an empty value"; this model does not distinguish them.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [symbol, ts]
+    columns:
+      - name: symbol
+        description: Futures symbol, e.g. BTCUSDT.
+        data_tests:
+          - not_null
+      - name: ts
+        description: >
+          Start of the hour, Unix epoch milliseconds (UTC); the kline open_time.
+          Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
+      - name: open
+        description: >
+          Price columns (open, high, low, close), volume and num_trades describe the hour
+          starting at ts, so they are only known at ts + 1h. Keep that in mind when deciding
+          what was knowable at a given time.
+      - name: volume
+        description: Traded volume in the base asset (BTC for BTCUSDT).
+      - name: num_trades
+        description: Number of trades in the hour.
+      - name: taker_ls_ratio
+        description: >
+          Taker buy volume / taker sell volume (taker_buy_base / (volume - taker_buy_base)).
+          A ratio, not the buy share: 1 means balanced, above 1 means more aggressive buying.
+          NULL when taker sell volume is 0, including hours with no volume.
+      - name: basis_rate
+        description: >
+          (close - index_close) / index_close: how far the futures price is above (positive)
+          or below (negative) the index price at the end of the hour. NULL when the index
+          price row is missing.
+      - name: sumopeninterest
+        description: >
+          Open interest at ts, in contracts of the base asset, not USD, so it is not directly
+          comparable across symbols. From stg_binance_futures__open_interest.
+      - name: global_ls_acc_ratio
+        description: >
+          Long/short account ratio across all traders (longshortratio from
+          stg_binance_futures__global_ls_account_ratio).
+      - name: top_ls_acc_ratio
+        description: >
+          Long/short ratio among top traders, counted by accounts (longshortratio from
+          stg_binance_futures__top_ls_account_ratio). NULL for most of 2022 (blank archive).
+      - name: top_ls_pos_ratio
+        description: >
+          Long/short ratio among top traders, weighted by position size (longshortratio from
+          stg_binance_futures__top_ls_position_ratio). NULL for most of 2022 (blank archive).
+      - name: funding_rate
+        description: >
+          The most recent funding rate settled at or before ts, forward-filled across the hours
+          between settlements (a backward-looking window, so no look-ahead). NULL before a
+          symbol's first settlement.
+
+unit_tests:
+  - name: features_matrix_joins_fill_and_ratios
+    description: >
+      Fake rows with known answers. AAA h1 has no open interest (LEFT JOIN keeps the hour,
+      NULL instead), h2 checks the funding forward-fill, h3 has zero volume (taker ratio
+      NULL, no divide-by-zero) and a new settlement. BBB has no funding at all.
+      Hours are h0 = 0, h1 = 3600000, h2 = 7200000, h3 = 10800000 (epoch ms).
+      Funding times are given already rounded; the rounding is tested on
+      stg_binance_futures__funding_rate.
+    model: features_matrix
+    given:
+      - input: ref('stg_binance_futures__klines')
+        rows:
+          - {symbol: AAA, open_time: 0,        close: 101.0, volume: 10.0, taker_buy_base: 6.0}
+          - {symbol: AAA, open_time: 3600000,  close: 101.0, volume: 10.0, taker_buy_base: 6.0}
+          - {symbol: AAA, open_time: 7200000,  close: 101.0, volume: 10.0, taker_buy_base: 6.0}
+          - {symbol: AAA, open_time: 10800000, close: 101.0, volume: 0.0,  taker_buy_base: 0.0}
+          - {symbol: BBB, open_time: 0,        close: 50.0,  volume: 10.0, taker_buy_base: 5.0}
+      - input: ref('stg_binance_futures__index_price_klines')
+        rows:
+          - {symbol: AAA, open_time: 0,        close: 100.0}
+          - {symbol: AAA, open_time: 3600000,  close: 100.0}
+          - {symbol: AAA, open_time: 7200000,  close: 100.0}
+          - {symbol: AAA, open_time: 10800000, close: 100.0}
+          - {symbol: BBB, open_time: 0,        close: 50.0}
+      - input: ref('stg_binance_futures__open_interest')
+        rows:                                   # AAA h1 deliberately missing
+          - {symbol: AAA, timestamp: 0,        sumopeninterest: 1000.0}
+          - {symbol: AAA, timestamp: 7200000,  sumopeninterest: 1000.0}
+          - {symbol: AAA, timestamp: 10800000, sumopeninterest: 1000.0}
+          - {symbol: BBB, timestamp: 0,        sumopeninterest: 500.0}
+      - input: ref('stg_binance_futures__global_ls_account_ratio')
+        rows: &ratio_rows
+          - {symbol: AAA, timestamp: 0,        longshortratio: 1.2}
+          - {symbol: AAA, timestamp: 3600000,  longshortratio: 1.2}
+          - {symbol: AAA, timestamp: 7200000,  longshortratio: 1.2}
+          - {symbol: AAA, timestamp: 10800000, longshortratio: 1.2}
+          - {symbol: BBB, timestamp: 0,        longshortratio: 0.9}
+      - input: ref('stg_binance_futures__top_ls_account_ratio')
+        rows: *ratio_rows
+      - input: ref('stg_binance_futures__top_ls_position_ratio')
+        rows: *ratio_rows
+      - input: ref('stg_binance_futures__funding_rate')
+        rows:                                   # none for BBB
+          - {symbol: AAA, fundingtime: 0,        fundingrate: 0.0001}
+          - {symbol: AAA, fundingtime: 10800000, fundingrate: 0.0003}
+    expect:
+      rows:
+        - {symbol: AAA, ts: 0,        taker_ls_ratio: 1.5,  basis_rate: 0.01, sumopeninterest: 1000.0, global_ls_acc_ratio: 1.2, funding_rate: 0.0001}
+        - {symbol: AAA, ts: 3600000,  taker_ls_ratio: 1.5,  basis_rate: 0.01, sumopeninterest: null,   global_ls_acc_ratio: 1.2, funding_rate: 0.0001}
+        - {symbol: AAA, ts: 7200000,  taker_ls_ratio: 1.5,  basis_rate: 0.01, sumopeninterest: 1000.0, global_ls_acc_ratio: 1.2, funding_rate: 0.0001}
+        - {symbol: AAA, ts: 10800000, taker_ls_ratio: null, basis_rate: 0.01, sumopeninterest: 1000.0, global_ls_acc_ratio: 1.2, funding_rate: 0.0003}
+        - {symbol: BBB, ts: 0,        taker_ls_ratio: 1.0,  basis_rate: 0.0,  sumopeninterest: 500.0,  global_ls_acc_ratio: 0.9, funding_rate: null}

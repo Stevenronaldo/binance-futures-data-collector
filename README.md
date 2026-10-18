@@ -234,25 +234,38 @@ The view does not expose `year`, and the forward-fill window needs earlier rows,
 
 ### Tests
 
-[`models/staging/_stg_binance_futures__models.yml`](binance_futures_dbt/models/staging/_stg_binance_futures__models.yml) checks that every staging model is unique on the key the mart joins on (`symbol` + `open_time`, `"timestamp"`, or the rounded `fundingtime`), using `dbt_utils.unique_combination_of_columns`. A duplicate in any input would silently duplicate rows in the matrix, so these tests fail loudly instead of deduplicating in SQL.
+Two kinds of tests, defined in [`models/staging/_stg_binance_futures__models.yml`](binance_futures_dbt/models/staging/_stg_binance_futures__models.yml) and [`models/marts/_marts_models.yml`](binance_futures_dbt/models/marts/_marts_models.yml):
+
+**Data tests** (24) check the real data in Athena:
+
+- Every staging model and `features_matrix` is unique on its key (`symbol` + `open_time`, `"timestamp"`, the rounded `fundingtime`, or `ts`), using `dbt_utils.unique_combination_of_columns`. A duplicate in any input would silently duplicate rows in the matrix, so these tests fail loudly instead of deduplicating in SQL.
+- The key columns are `not_null`: a single row with a null key passes a uniqueness test, but never matches a join.
+
+**Unit tests** (2) check the SQL logic on fake rows with known answers, so they read no data:
+
+- `features_matrix_joins_fill_and_ratios`: the LEFT JOIN keeps an hour with missing open interest, funding is forward-filled without look-ahead, zero volume gives a null taker ratio, and a symbol with no settlements has a null funding rate.
+- `funding_rate_rounds_to_hour`: the funding-time rounding, including both edges of the rule (12 minutes before and 48 minutes after the hour). It must match `round_ms` in `src/lambda_function.py`.
+
+The data tests only check that rows are well-formed; a logic bug such as a forward-fill ordered the wrong way produces plausible values and passes them. Both unit tests were confirmed to fail on that kind of bug.
+
+Model and column descriptions live in the same YAML files; `dbt docs generate && dbt docs serve` shows them with the lineage graph.
 
 ### Running dbt
 
-Requires `dbt-athena` (it pulls in `dbt-core`). It is not in `requirements.txt`, which lists the Lambda's dependencies only.
-
-1. Create `binance_futures_dbt/.env` (gitignored):
+1. Install the pinned versions: `pip install -r binance_futures_dbt/requirements.txt` (`dbt-core` 1.12.6, `dbt-athena` 1.11.1). They are kept out of the root `requirements.txt`, which lists the Lambda's dependencies only. Pin `dbt-core` explicitly: `dbt-athena` allows pre-releases, so an unpinned install can pick up a dbt beta.
+2. Create `binance_futures_dbt/.env` (gitignored):
    ```
    DBT_S3_BUCKET=<your-bucket>
    DBT_REGION=ap-southeast-1
    ```
-   `profiles.yml` reads both with `env_var()`. dbt 1.13 loads `.env` from the project folder automatically; with older versions, export the variables first (`set -a; source .env; set +a`).
-2. Credentials come from the default AWS CLI profile.
-3. From `binance_futures_dbt/`:
+   `profiles.yml` reads both with `env_var()`. dbt 1.12.6 loads `.env` from the project folder automatically when run from there; if your dbt version doesn't, export the variables first (`set -a; source .env; set +a`).
+3. Credentials come from the default AWS CLI profile.
+4. From `binance_futures_dbt/`:
    ```bash
    dbt deps     # installs dbt_utils
    dbt debug    # checks the profile and the Athena connection
    dbt run      # creates the views in binance_futures_dbt
-   dbt test     # uniqueness tests
+   dbt test     # 24 data tests + 2 unit tests
    ```
 
 Query results go to `s3://<bucket>/athena_result/`. Tables dbt materializes (none yet; all models are views) would go to `s3://<bucket>/dbt/`.
@@ -455,10 +468,11 @@ binance-futures-data-collector/
 │   └── migrate_partitions.py    # one-off: migration to the year= layout
 ├── binance_futures_dbt/
 │   ├── dbt_project.yml · profiles.yml · packages.yml
+│   ├── requirements.txt                  # pinned dbt-core + dbt-athena
 │   └── models/
 │       ├── _sources_binance_futures.yml  # the 7 Glue tables as dbt sources
-│       ├── staging/                      # stg_binance_futures__* views + uniqueness tests
-│       └── marts/features_matrix.sql     # One Big Table: joined hourly feature matrix
+│       ├── staging/                      # stg_binance_futures__* views, tests, docs
+│       └── marts/                        # features_matrix (One Big Table), tests, docs
 ├── terraform/
 │   ├── version.tf · providers.tf · variables.tf · data.tf
 │   ├── lambda.tf · iam.tf · events.tf · logs.tf · sns.tf
