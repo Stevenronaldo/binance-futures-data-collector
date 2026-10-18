@@ -1,43 +1,195 @@
 models:
   - name: stg_binance_futures__klines
+    description: One row per symbol per period of USDⓈ-M futures candles.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [symbol, open_time]
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null
+      - name: open_time
+        description: >
+          Start of the candle, Unix epoch milliseconds (UTC).
+          Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
 
   - name: stg_binance_futures__index_price_klines
+    description: One row per symbol per period of USDⓈ-M index price candles.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [symbol, open_time]
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null
+      - name: open_time
+        description: >
+          Start of the candle, Unix epoch milliseconds (UTC).
+          Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
 
   - name: stg_binance_futures__funding_rate
+    description: >
+      One row per symbol per funding settlement. Settlements are usually every 8h,
+      but Binance can change a symbol's interval (e.g. to 4h or 1h).
     data_tests:
       # fundingtime is rounded to the hour here, so this also catches two settlements snapping to the same hour
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [symbol, fundingtime]
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null
+      - name: fundingtime
+        description: >
+          Settlement time rounded to the hour, Unix epoch milliseconds (UTC).
+          Not the raw Binance value: raw times drift a few ms off the hour, so 12 minutes
+          are added before flooring to the hour (07:59:59.998 becomes 08:00).
+          The name is kept from the raw column. Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
 
   - name: stg_binance_futures__open_interest
+    description: >
+      One row per symbol per period of open interest (all open positions on the contract).
+      The API only serves the last ~30 days; older rows come from the data.binance.vision
+      archive backfill, which fills only the open interest columns.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [symbol, '"timestamp"']
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null
+      - name: "timestamp"
+        description: >
+          Time of the open interest reading, Unix epoch milliseconds (UTC).
+          Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
+      - name: sumopeninterest
+        description: Total open interest in contracts, i.e. in the base asset (BTC for BTCUSDT), not USD.
+      - name: sumopeninterestvalue
+        description: The same open interest valued in USDT (quote asset).
+      - name: cmccirculatingsupply
+        description: >
+          Circulating supply of the base asset from CoinMarketCap. Nullable, and null for
+          archive-backfilled rows. Near-static, so the feature matrix does not use it.
 
   - name: stg_binance_futures__global_ls_account_ratio
+    description: >
+      One row per symbol per period of the long/short ratio across all trader accounts.
+      The API only serves the last ~30 days; older rows come from the archive backfill,
+      which provides only longshortratio, and some of those values are empty.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [symbol, '"timestamp"']
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null
+      - name: "timestamp"
+        description: >
+          Time of the reading, Unix epoch milliseconds (UTC).
+          Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
+      - name: longaccount
+        description: Share of accounts with a net long position (0 to 1). Null for archive-backfilled rows.
+      - name: shortaccount
+        description: Share of accounts with a net short position (0 to 1). Null for archive-backfilled rows.
+      - name: longshortratio
+        description: longaccount / shortaccount. Above 1 means more accounts are long than short.
 
   - name: stg_binance_futures__top_ls_account_ratio
+    description: >
+      One row per symbol per period of the long/short ratio among top traders (Binance's
+      top 20% of accounts by margin balance), counted by accounts.
+      The API only serves the last ~30 days; older rows come from the archive backfill,
+      which provides only longshortratio. The archive is blank for most of 2022,
+      so longshortratio is null there.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [symbol, '"timestamp"']
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null
+      - name: "timestamp"
+        description: >
+          Time of the reading, Unix epoch milliseconds (UTC).
+          Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
+      - name: longaccount
+        description: Share of top-trader accounts that are net long (0 to 1). Null for archive-backfilled rows.
+      - name: shortaccount
+        description: Share of top-trader accounts that are net short (0 to 1). Null for archive-backfilled rows.
+      - name: longshortratio
+        description: longaccount / shortaccount for top traders, counted by accounts.
 
   - name: stg_binance_futures__top_ls_position_ratio
+    description: >
+      One row per symbol per period of the long/short ratio among top traders, weighted by
+      position size instead of counted by accounts. Same history and archive caveats as
+      stg_binance_futures__top_ls_account_ratio, including the blank 2022 archive.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [symbol, '"timestamp"']
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null
+      - name: "timestamp"
+        description: >
+          Time of the reading, Unix epoch milliseconds (UTC).
+          Together with symbol, the unique key of this model.
+        data_tests:
+          - not_null
+      - name: longaccount
+        description: >
+          Despite the name, the share of top traders' total position size that is long (0 to 1),
+          not a share of accounts. Null for archive-backfilled rows.
+      - name: shortaccount
+        description: >
+          Despite the name, the share of top traders' total position size that is short (0 to 1).
+          Null for archive-backfilled rows.
+      - name: longshortratio
+        description: longaccount / shortaccount, i.e. long position size relative to short position size.
+
+unit_tests:
+  - name: funding_rate_rounds_to_hour
+    description: >
+      fundingtime snaps to the hour: anything from 12 minutes before the hour up to
+      48 minutes after it lands on that hour (must match round_ms in src/lambda_function.py).
+      One symbol per case, so each input row is checked on its own. H = 28800000 (08:00).
+    model: stg_binance_futures__funding_rate
+    given:
+      - input: source('binance_futures', 'funding_rate')
+        rows:
+          - {symbol: EXACT,     fundingtime: 28800000, fundingrate: 0.0001}   # 08:00:00.000
+          - {symbol: LATE_5MS,  fundingtime: 28800005, fundingrate: 0.0001}   # 08:00:00.005
+          - {symbol: EARLY_2MS, fundingtime: 28799998, fundingrate: 0.0001}   # 07:59:59.998
+          - {symbol: EARLY_12M, fundingtime: 28080000, fundingrate: 0.0001}   # 07:48:00.000, first value that rounds up
+          - {symbol: EARLY_13M, fundingtime: 28079999, fundingrate: 0.0001}   # 07:47:59.999, stays at 07:00
+          - {symbol: LATE_48M,  fundingtime: 31679999, fundingrate: 0.0001}   # 08:47:59.999, last value that stays at 08:00
+          - {symbol: LATE_48M1, fundingtime: 31680000, fundingrate: 0.0001}   # 08:48:00.000, moves on to 09:00
+    expect:
+      rows:
+        - {symbol: EXACT,     fundingtime: 28800000}
+        - {symbol: LATE_5MS,  fundingtime: 28800000}
+        - {symbol: EARLY_2MS, fundingtime: 28800000}
+        - {symbol: EARLY_12M, fundingtime: 28800000}
+        - {symbol: EARLY_13M, fundingtime: 25200000}
+        - {symbol: LATE_48M,  fundingtime: 28800000}
+        - {symbol: LATE_48M1, fundingtime: 32400000}

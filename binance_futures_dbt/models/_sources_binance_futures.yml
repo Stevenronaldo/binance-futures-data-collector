@@ -1,6 +1,10 @@
 sources:
   - name: binance_futures
-    description: binance futures endpoints table 
+    description: >
+      Raw Binance USDⓈ-M futures data written by the Lambda collector as Parquet in S3,
+      one external table per endpoint. Tables are owned by Terraform (terraform/athena.tf);
+      dbt only reads them. Partitioned by symbol and year; all time fields are Unix epoch
+      milliseconds (UTC), stored as Binance returns them.
     database: awsdatacatalog
     schema: binance_futures
     tables:
