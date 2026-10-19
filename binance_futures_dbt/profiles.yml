@@ -8,6 +8,6 @@ binance_futures_dbt:
       s3_staging_dir: "s3://{{ env_var('DBT_S3_BUCKET')}}/athena_result/"
       s3_data_dir: "s3://{{ env_var('DBT_S3_BUCKET')}}/dbt/"
       work_group: primary
-      aws_profile_name: default
+      aws_profile_name: "{{ env_var('DBT_AWS_PROFILE')}}"
       threads: 4
   target: dev

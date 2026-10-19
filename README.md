@@ -257,16 +257,22 @@ Model and column descriptions live in the same YAML files; `dbt docs generate &&
    ```
    DBT_S3_BUCKET=<your-bucket>
    DBT_REGION=ap-southeast-1
+   DBT_AWS_PROFILE=dbt
    ```
-   `profiles.yml` reads both with `env_var()`. dbt 1.12.6 loads `.env` from the project folder automatically when run from there; if your dbt version doesn't, export the variables first (`set -a; source .env; set +a`).
-3. Credentials come from the default AWS CLI profile.
+   `profiles.yml` reads all three with `env_var()`. dbt 1.12.6 loads `.env` from the project folder automatically when run from there; if your dbt version doesn't, export the variables first (`set -a; source .env; set +a`). `DBT_AWS_PROFILE` has no default on purpose: if it is missing, dbt fails instead of silently running with your admin credentials.
+3. Credentials: dbt runs as its own least-privilege IAM user, `binance-futures-dbt` (see [IAM Permissions](#iam-permissions)). Terraform creates the user but not its access key, which would otherwise be stored in plain text in `terraform.tfstate`. Create the key once with an admin profile and store it as the `dbt` AWS CLI profile:
+   ```bash
+   aws iam create-access-key --user-name binance-futures-dbt
+   aws configure --profile dbt          # paste the key; region ap-southeast-1
+   aws sts get-caller-identity --profile dbt   # should show user/binance-futures-dbt
+   ```
 4. From `binance_futures_dbt/`:
    ```bash
    dbt deps     # installs dbt_utils
    dbt debug    # checks the profile and the Athena connection
-   dbt run      # creates the views in binance_futures_dbt
-   dbt test     # 24 data tests + 2 unit tests
+   dbt build    # builds the views and runs all tests in dependency order (24 data + 2 unit)
    ```
+   `dbt build` runs each model's unit tests before building it and its data tests right after, and skips downstream models when a test fails. `dbt run` and `dbt test` do the two halves separately.
 
 Query results go to `s3://<bucket>/athena_result/`. Tables dbt materializes (none yet; all models are views) would go to `s3://<bucket>/dbt/`.
 
@@ -309,6 +315,9 @@ All AWS resources live in `terraform/`, one file per concern. They were original
 | CloudWatch alarm | `binance-futures-collector-not-running` |
 | SNS topic | `lambda-error-notification` |
 | Glue database | `binance_futures` (+ 7 external tables) |
+| IAM user (dbt) | `binance-futures-dbt` + inline policy `binance-futures-dbt-access` (`terraform/dbt_iam.tf`) |
+
+The `binance_futures_dbt` Glue database is not in Terraform: dbt creates and replaces its views on every run.
 
 **Setup:**
 
@@ -355,6 +364,29 @@ The Lambda execution role (managed by Terraform) has:
 ```
 
 `s3:ListBucket` matters: without it, S3 returns `AccessDenied` instead of `NoSuchKey` for a missing watermark, and first-run detection would fail.
+
+### dbt user
+
+dbt runs as the IAM user `binance-futures-dbt` instead of an admin identity, with an inline least-privilege policy ([`terraform/dbt_iam.tf`](terraform/dbt_iam.tf)). Raw data is read-only for it; it can only write to its own Glue database and S3 prefixes:
+
+| Statement | Actions | Resources |
+| :---- | :---- | :---- |
+| `RunAthenaQueries` | start, poll, read and stop queries; read the workgroup | workgroup `primary` |
+| `ReadGlueCatalog` | get databases, tables and partitions | catalog, `binance_futures` and `binance_futures_dbt` |
+| `ManageDbtTables` | create, update and delete tables; list table versions | catalog, `binance_futures_dbt` only |
+| `ReadRawData` | `s3:GetObject` | `<bucket>/binance-futures/*` |
+| `WriteDbtAndQueryResults` | get, put and delete objects | `<bucket>/athena_result/*`, `<bucket>/dbt/*` |
+| `ListBucket` | `s3:ListBucket`, `s3:GetBucketLocation` | the bucket |
+
+Things that are easy to get wrong:
+
+- **Glue checks three resources per table action:** the catalog, the database and the table. The catalog ARN is in `ManageDbtTables` for that reason; writes to raw tables are still denied because their database and table ARNs are not listed.
+- **The raw S3 read is needed** even though the tables are in Glue: Glue holds only metadata, and Athena reads the Parquet files with the caller's own permissions.
+- **`glue:GetTableVersions`** is called by dbt-athena after replacing a view, to clean up old table versions. It is scoped to `binance_futures_dbt` only.
+
+Checked with `aws iam simulate-principal-policy` (run as an admin, since the dbt user cannot call IAM): Glue create/update/delete on raw tables and S3 writes under `binance-futures/` are denied; the same actions on `binance_futures_dbt` and `dbt/` are allowed. `dbt build` passes as this user.
+
+Access keys are long-lived; IAM Identity Center (SSO) or an assumed role with temporary credentials would be the next step.
 
 ---
 
@@ -477,6 +509,7 @@ binance-futures-data-collector/
 │   ├── version.tf · providers.tf · variables.tf · data.tf
 │   ├── lambda.tf · iam.tf · events.tf · logs.tf · sns.tf
 │   ├── athena.tf                # Glue database + 7 tables
+│   ├── dbt_iam.tf               # least-privilege IAM user for dbt
 │   └── terraform.tfvars.example
 ├── README.md
 ├── requirements.txt
