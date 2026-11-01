@@ -16,5 +16,5 @@ venv/
 
 # OS / editor
 .idea/
-
+.vscode/
 data/
