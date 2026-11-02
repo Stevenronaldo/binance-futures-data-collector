@@ -23,7 +23,7 @@ session = make_session()
 
 def clean_df(df, time_field, schema):
     """Helper: deduplicate and convert dtype according to schema"""
-    df = df.drop_duplicates(subset=time_field, keep='last')
+    df = df.drop_duplicates(subset=time_field, keep='last').copy()
 
     missing = set(schema) - set(df.columns)
     if missing:

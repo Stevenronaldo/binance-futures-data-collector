@@ -8,6 +8,9 @@ models:
       have empty ratios, so filter explicitly when building features
       (e.g. WHERE sumopeninterest IS NOT NULL). A NULL here can mean either "no row in the
       source" or "the source row had an empty value"; this model does not distinguish them.
+    config:
+      contract:
+        enforced: true
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
@@ -15,12 +18,14 @@ models:
     columns:
       - name: symbol
         description: Futures symbol, e.g. BTCUSDT.
+        data_type: varchar  
         data_tests:
           - not_null
       - name: ts
         description: >
           Start of the hour, Unix epoch milliseconds (UTC); the kline open_time.
           Together with symbol, the unique key of this model.
+        data_type: bigint
         data_tests:
           - not_null
       - name: open
@@ -28,41 +33,51 @@ models:
           Price columns (open, high, low, close), volume and num_trades describe the hour
           starting at ts, so they are only known at ts + 1h. Keep that in mind when deciding
           what was knowable at a given time.
+        data_type: double
       - name: volume
         description: Traded volume in the base asset (BTC for BTCUSDT).
+        data_type: double
       - name: num_trades
         description: Number of trades in the hour.
+        data_type: bigint
       - name: taker_ls_ratio
         description: >
           Taker buy volume / taker sell volume (taker_buy_base / (volume - taker_buy_base)).
           A ratio, not the buy share: 1 means balanced, above 1 means more aggressive buying.
           NULL when taker sell volume is 0, including hours with no volume.
+        data_type: double
       - name: basis_rate
         description: >
           (close - index_close) / index_close: how far the futures price is above (positive)
           or below (negative) the index price at the end of the hour. NULL when the index
           price row is missing.
+        data_type: double
       - name: sumopeninterest
         description: >
           Open interest at ts, in contracts of the base asset, not USD, so it is not directly
           comparable across symbols. From stg_binance_futures__open_interest.
+        data_type: double
       - name: global_ls_acc_ratio
         description: >
           Long/short account ratio across all traders (longshortratio from
           stg_binance_futures__global_ls_account_ratio).
+        data_type: double
       - name: top_ls_acc_ratio
         description: >
           Long/short ratio among top traders, counted by accounts (longshortratio from
           stg_binance_futures__top_ls_account_ratio). NULL for most of 2022 (blank archive).
+        data_type: double
       - name: top_ls_pos_ratio
         description: >
           Long/short ratio among top traders, weighted by position size (longshortratio from
           stg_binance_futures__top_ls_position_ratio). NULL for most of 2022 (blank archive).
+        data_type: double
       - name: funding_rate
         description: >
           The most recent funding rate settled at or before ts, forward-filled across the hours
           between settlements (a backward-looking window, so no look-ahead). NULL before a
           symbol's first settlement.
+        data_type: double
 
 unit_tests:
   - name: features_matrix_joins_fill_and_ratios
